@@ -127,131 +127,115 @@ PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Glycol Chiller</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@400;600;800&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg: #0a111e; --panel: #101b2d; --line: #1c2c44; --ink: #e8f2ff;
-  --dim: #6f83a2; --ice: #6fd7ff; --cold: #37b6ff; --ok: #4ade80;
-  --warn: #fbbf24; --bad: #fb7185; --mono: "IBM Plex Mono", ui-monospace, monospace;
+  --bg: #08090c; --line: #1b1d23; --ink: #e2e4ea; --mut: #8a8f98; --dim: #62666e;
+  --accent: #7b86e0; --ok: #4cb782; --warn: #d9a132; --bad: #eb5757;
 }
 * { box-sizing: border-box; margin: 0; }
 body {
-  background:
-    radial-gradient(1200px 500px at 80% -10%, rgba(55,182,255,.10), transparent 60%),
-    radial-gradient(900px 400px at 10% 110%, rgba(55,182,255,.06), transparent 60%),
-    var(--bg);
-  color: var(--ink); font-family: "Oxanium", sans-serif;
-  min-height: 100vh; padding: 22px clamp(12px, 3vw, 40px) 40px;
+  background: var(--bg); color: var(--ink);
+  font: 400 14px/1.45 "Inter", -apple-system, sans-serif;
+  font-variant-numeric: tabular-nums;
+  max-width: 760px; margin: 0 auto; padding: 40px 24px 60px;
 }
-header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 20px; }
-h1 { font-weight: 800; font-size: clamp(20px, 3vw, 28px); letter-spacing: .12em; }
-h1 span { color: var(--cold); }
-.chip {
-  font-family: var(--mono); font-size: 13px; padding: 4px 12px; border-radius: 999px;
-  border: 1px solid var(--line); color: var(--dim); background: var(--panel);
-}
-#stat.on { color: var(--ok); border-color: rgba(74,222,128,.4); }
-#stat.off { color: var(--warn); border-color: rgba(251,191,36,.4); }
-#stat.alarm, #net.down { color: var(--bad); border-color: rgba(251,113,133,.5); }
-.grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
-.card {
-  background: linear-gradient(180deg, rgba(111,215,255,.04), transparent 40%), var(--panel);
-  border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px;
-}
-.card h2 {
-  font-size: 12px; font-weight: 600; letter-spacing: .28em; color: var(--dim);
-  text-transform: uppercase; margin-bottom: 14px; display: flex; align-items: center; gap: 10px;
-}
-.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex: none; }
-.dot.on { background: var(--ok); box-shadow: 0 0 8px rgba(74,222,128,.7); }
-.hero { grid-column: 1 / -1; display: flex; align-items: center; gap: clamp(16px, 4vw, 48px); flex-wrap: wrap; }
-.big { font-family: var(--mono); font-weight: 600; font-size: clamp(38px, 6vw, 64px); line-height: 1; color: var(--ice); }
-.big small { font-size: .35em; color: var(--dim); font-weight: 400; margin-left: 2px; }
-.lbl { font-size: 11px; letter-spacing: .22em; color: var(--dim); text-transform: uppercase; margin-bottom: 6px; }
-.arrow { color: var(--cold); font-size: clamp(22px, 3vw, 34px); }
-.sub { display: flex; gap: 26px; flex-wrap: wrap; margin-left: auto; }
-.sub .v { font-family: var(--mono); font-size: 20px; }
-.row { display: flex; justify-content: space-between; align-items: baseline; padding: 5px 0; border-bottom: 1px dashed var(--line); }
-.row:last-child { border-bottom: 0; }
-.row .k { color: var(--dim); font-size: 13px; }
-.row .v { font-family: var(--mono); font-size: 16px; }
-.meter { display: flex; align-items: center; gap: 10px; padding: 7px 0; }
-.meter .k { color: var(--dim); font-size: 13px; width: 44px; }
-.bar { flex: 1; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
-.bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--cold), var(--ice)); transition: width .8s; }
-.meter .v { font-family: var(--mono); font-size: 14px; width: 58px; text-align: right; }
-.pills { display: flex; gap: 10px; flex-wrap: wrap; }
-.pill {
-  font-family: var(--mono); font-size: 13px; padding: 6px 14px; border-radius: 999px;
-  border: 1px solid var(--line); color: var(--dim); display: flex; gap: 8px; align-items: center;
-}
-.pill.on { color: var(--ok); border-color: rgba(74,222,128,.35); }
-.pill.bad { color: var(--bad); border-color: rgba(251,113,133,.5); }
-.hours { display: flex; gap: 24px; flex-wrap: wrap; font-family: var(--mono); font-size: 13px; color: var(--dim); }
-.hours b { color: var(--ink); font-weight: 600; }
-details { margin-top: 22px; color: var(--dim); }
-details table { border-collapse: collapse; font-family: var(--mono); font-size: 13px; margin-top: 10px; }
-details td, details th { border: 1px solid var(--line); padding: 4px 10px; text-align: left; }
-footer { margin-top: 18px; font-size: 12px; color: var(--dim); letter-spacing: .08em; }
+section { padding: 20px 0; border-bottom: 1px solid var(--line); }
+header { display: flex; align-items: center; gap: 10px; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+h1 { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+#stat { color: var(--mut); font-size: 13px; display: flex; align-items: center; gap: 7px; margin-left: 4px; }
+#net { margin-left: auto; color: var(--dim); font-size: 12px; }
+#net.down { color: var(--bad); }
+.hero { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.hero .t { font-size: 30px; font-weight: 500; letter-spacing: -.02em; }
+.hero .t.out { color: var(--accent); }
+.hero .u { color: var(--dim); font-size: 14px; }
+.hero .to { color: var(--dim); font-size: 18px; padding: 0 4px; }
+.facts { display: flex; gap: 28px; flex-wrap: wrap; margin-top: 14px; }
+.facts div { font-size: 13px; color: var(--mut); }
+.facts b { display: block; font-size: 14px; font-weight: 500; color: var(--ink); margin-top: 1px; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 40px; }
+@media (max-width: 560px) { .cols { grid-template-columns: 1fr; } }
+h2 { font-size: 13px; font-weight: 600; color: var(--ink); display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
+.row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
+.row .k { color: var(--mut); }
+.row .v { color: var(--ink); font-weight: 500; }
+.row .v i { color: var(--dim); font-style: normal; font-weight: 400; }
+.bar { width: 72px; height: 3px; border-radius: 2px; background: var(--line); display: inline-block; vertical-align: middle; margin-right: 8px; }
+.bar i { display: block; height: 100%; border-radius: 2px; background: var(--mut); transition: width .6s; }
+.pills { display: flex; gap: 22px; flex-wrap: wrap; }
+.pills span { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--mut); }
+.hours { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 12px; font-size: 12px; color: var(--dim); }
+.hours b { color: var(--mut); font-weight: 500; }
+details { padding-top: 18px; color: var(--dim); font-size: 13px; }
+summary { cursor: pointer; }
+details table { border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+details td, details th { border: 1px solid var(--line); padding: 3px 10px; text-align: left; color: var(--mut); }
+footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
 </style>
 </head>
 <body>
 <header>
-  <h1>GLYCOL <span>CHILLER</span></h1>
-  <span class="chip" id="stat">…</span>
-  <span class="chip" id="net">connecting</span>
+  <h1>Glycol Chiller</h1>
+  <span id="stat"><span class="dot" id="statdot"></span><span id="stattxt">connecting</span></span>
+  <span id="net"></span>
 </header>
 
-<div class="grid">
-  <div class="card hero">
-    <div><div class="lbl">Glycol in</div><div class="big" id="glyIn">–<small>°F</small></div></div>
-    <div class="arrow">→</div>
-    <div><div class="lbl">Glycol out</div><div class="big" id="glyOut">–<small>°F</small></div></div>
-    <div class="sub">
-      <div><div class="lbl">Setpoint</div><div class="v" id="setp">–</div></div>
-      <div><div class="lbl">Reservoir</div><div class="v" id="resT">–</div></div>
-      <div><div class="lbl">Supply pres</div><div class="v" id="supP">–</div></div>
-      <div><div class="lbl">Power req</div><div class="v" id="pwr">–</div></div>
-    </div>
+<section class="hero-wrap">
+  <div class="hero">
+    <span class="t" id="glyIn">–</span><span class="u">°F in</span>
+    <span class="to">→</span>
+    <span class="t out" id="glyOut">–</span><span class="u">°F out</span>
   </div>
+  <div class="facts">
+    <div>Setpoint<b id="setp">–</b></div>
+    <div>Reservoir<b id="resT">–</b></div>
+    <div>Supply pressure<b id="supP">–</b></div>
+    <div>Power request<b id="pwr">–</b></div>
+  </div>
+</section>
 
-  <div class="card" id="c1">
+<section class="cols">
+  <div>
     <h2><span class="dot" id="comp1"></span>Circuit A</h2>
-    <div class="row"><span class="k">Discharge / suction pres</span><span class="v"><span id="dscgP1">–</span> / <span id="suctP1">–</span> psi</span></div>
-    <div class="row"><span class="k">Condensing / evap temp</span><span class="v"><span id="condT1">–</span> / <span id="evapT1">–</span> °F</span></div>
-    <div class="row"><span class="k">Suction temp</span><span class="v"><span id="suctT1">–</span> °F</span></div>
+    <div class="row"><span class="k">Discharge pressure</span><span class="v"><span id="dscgP1">–</span> <i>psi</i></span></div>
+    <div class="row"><span class="k">Suction pressure</span><span class="v"><span id="suctP1">–</span> <i>psi</i></span></div>
+    <div class="row"><span class="k">Condensing temp</span><span class="v"><span id="condT1">–</span> <i>°F</i></span></div>
+    <div class="row"><span class="k">Evaporating temp</span><span class="v"><span id="evapT1">–</span> <i>°F</i></span></div>
+    <div class="row"><span class="k">Suction temp</span><span class="v"><span id="suctT1">–</span> <i>°F</i></span></div>
     <div class="row"><span class="k">Suction superheat</span><span class="v" id="ssh1">–</span></div>
-    <div class="meter"><span class="k">Fan</span><div class="bar"><i id="fanB1"></i></div><span class="v" id="fan1">–</span></div>
-    <div class="meter"><span class="k">EEV</span><div class="bar"><i id="eevB1"></i></div><span class="v" id="eev1">–</span></div>
+    <div class="row"><span class="k">Fan</span><span class="v"><span class="bar"><i id="fanB1"></i></span><span id="fan1">–</span></span></div>
+    <div class="row"><span class="k">EEV</span><span class="v"><span class="bar"><i id="eevB1"></i></span><span id="eev1">–</span></span></div>
   </div>
-
-  <div class="card" id="c2">
+  <div>
     <h2><span class="dot" id="comp2"></span>Circuit B</h2>
-    <div class="row"><span class="k">Discharge / suction pres</span><span class="v"><span id="dscgP2">–</span> / <span id="suctP2">–</span> psi</span></div>
-    <div class="row"><span class="k">Condensing / evap temp</span><span class="v"><span id="condT2">–</span> / <span id="evapT2">–</span> °F</span></div>
-    <div class="row"><span class="k">Suction temp</span><span class="v"><span id="suctT2">–</span> °F</span></div>
+    <div class="row"><span class="k">Discharge pressure</span><span class="v"><span id="dscgP2">–</span> <i>psi</i></span></div>
+    <div class="row"><span class="k">Suction pressure</span><span class="v"><span id="suctP2">–</span> <i>psi</i></span></div>
+    <div class="row"><span class="k">Condensing temp</span><span class="v"><span id="condT2">–</span> <i>°F</i></span></div>
+    <div class="row"><span class="k">Evaporating temp</span><span class="v"><span id="evapT2">–</span> <i>°F</i></span></div>
+    <div class="row"><span class="k">Suction temp</span><span class="v"><span id="suctT2">–</span> <i>°F</i></span></div>
     <div class="row"><span class="k">Suction superheat</span><span class="v" id="ssh2">–</span></div>
-    <div class="meter"><span class="k">Fan</span><div class="bar"><i id="fanB2"></i></div><span class="v" id="fan2">–</span></div>
-    <div class="meter"><span class="k">EEV</span><div class="bar"><i id="eevB2"></i></div><span class="v" id="eev2">–</span></div>
+    <div class="row"><span class="k">Fan</span><span class="v"><span class="bar"><i id="fanB2"></i></span><span id="fan2">–</span></span></div>
+    <div class="row"><span class="k">EEV</span><span class="v"><span class="bar"><i id="eevB2"></i></span><span id="eev2">–</span></span></div>
   </div>
+</section>
 
-  <div class="card">
-    <h2>Plant</h2>
-    <div class="pills" id="pills"></div>
-    <div style="height:14px"></div>
-    <div class="hours" id="hours"></div>
-  </div>
-</div>
+<section>
+  <div class="pills" id="pills"></div>
+  <div class="hours" id="hours"></div>
+</section>
 
 <details><summary>Raw registers</summary><table id="raw"></table></details>
-<footer>read-only · Modbus TCP + getvar.csv · refreshes every 5 s</footer>
+<footer>Read-only · Modbus TCP + getvar.csv · refreshes every 5 s</footer>
 
 <script>
 const S = v => (v > 32767 ? v - 65536 : v) / 10;          // signed int16, ×10
-const STATUS = {1:"STANDBY",2:"OFF · ALARM",3:"OFF · BMS",4:"OFF · SCHEDULE",
-                5:"OFF · INPUT",6:"OFF · KEYBOARD",9:"RUNNING"};
-// every target's first child is its text node; <small> units stay untouched
-const set = (id, txt) => { document.getElementById(id).firstChild.nodeValue = txt; };
+const STATUS = {1:"Standby",2:"Off — alarm",3:"Off — BMS",4:"Off — schedule",
+                5:"Off — input",6:"Off — keyboard",9:"Running"};
+const $ = id => document.getElementById(id);
+const set = (id, txt) => { $(id).textContent = txt; };
 const sh = v => (v < -50 ? "—" : v.toFixed(1));            // sentinel: probe not fitted
 
 async function tick() {
@@ -263,45 +247,44 @@ async function tick() {
   const r = a => S(d.regs[a] ?? 0), w = d.web || {};
 
   const st = d.regs[0];
-  const el = document.getElementById("stat");
-  el.textContent = STATUS[st] || ("STATUS " + st);
-  el.className = "chip " + (st === 9 ? "on" : st === 2 ? "alarm" : "off");
+  set("stattxt", STATUS[st] || "Status " + st);
+  $("statdot").className = "dot " + (st === 9 ? "ok" : st === 2 ? "bad" : "warn");
 
   set("glyIn", r(69).toFixed(1)); set("glyOut", r(68).toFixed(1));
   set("setp", r(70).toFixed(1) + " °F"); set("resT", r(132).toFixed(1) + " °F");
   set("supP", (w["Glycol supply pres psi"] ?? NaN).toFixed(1) + " psi");
-  set("pwr", (d.regs[1] / 10).toFixed(0) + " %");
+  set("pwr", (d.regs[1] / 10).toFixed(0) + "%");
 
   for (const [n, sfx] of [["1", "A"], ["2", "B"]]) {
     const base = n === "1" ? 0 : 32;
     set("dscgP" + n, r(base + 3).toFixed(1)); set("suctP" + n, r(base + 10).toFixed(1));
     set("condT" + n, r(base + 4).toFixed(1)); set("evapT" + n, r(base + 11).toFixed(1));
     set("suctT" + n, r(base + 9).toFixed(1)); set("ssh" + n, sh(r(base + 23)));
-    document.getElementById("comp" + n).className = "dot" + (w["Compressor " + sfx + " on"] ? " on" : "");
+    $("comp" + n).className = "dot" + (w["Compressor " + sfx + " on"] ? " ok" : "");
     const fan = w["Fan speed " + sfx + " %"] ?? 0, eev = w["EEV position " + sfx + " %"] ?? 0;
-    set("fan" + n, fan.toFixed(1) + "%"); document.getElementById("fanB" + n).style.width = fan + "%";
-    set("eev" + n, eev.toFixed(1) + "%"); document.getElementById("eevB" + n).style.width = eev + "%";
+    set("fan" + n, fan.toFixed(0) + "%"); $("fanB" + n).style.width = fan + "%";
+    set("eev" + n, eev.toFixed(0) + "%"); $("eevB" + n).style.width = eev + "%";
   }
 
   const pill = (name, on, badWhenOff) =>
-    `<span class="pill ${on ? "on" : badWhenOff ? "bad" : ""}"><span class="dot ${on ? "on" : ""}"></span>${name}</span>`;
-  document.getElementById("pills").innerHTML =
+    `<span><span class="dot ${on ? "ok" : badWhenOff ? "bad" : ""}"></span>${name}</span>`;
+  $("pills").innerHTML =
     pill("Chiller pump", w["Chiller pump on"]) + pill("Process pump", w["Process pump on"]) +
     pill("Flow A", w["Glycol flow A ok"], true) + pill("Flow B", w["Glycol flow B ok"], true);
 
-  document.getElementById("hours").innerHTML =
+  $("hours").innerHTML =
     `<span>Comp A <b>${d.regs[135]} h</b></span><span>Comp B <b>${d.regs[141]} h</b></span>` +
     `<span>Fan A <b>${d.regs[158]} h</b></span><span>Pump 2 <b>${d.regs[131]} h</b></span>`;
 
-  document.getElementById("raw").innerHTML =
+  $("raw").innerHTML =
     "<tr><th>reg</th><th>raw</th><th>÷10</th></tr>" +
     Object.entries(d.regs).filter(([, v]) => v !== 0)
       .map(([k, v]) => `<tr><td>${k}</td><td>${v}</td><td>${S(v)}</td></tr>`).join("");
 }
 function net(ok) {
-  const el = document.getElementById("net");
-  el.textContent = ok ? new Date().toLocaleTimeString() : "OFFLINE";
-  el.className = "chip" + (ok ? "" : " down");
+  const el = $("net");
+  el.textContent = ok ? new Date().toLocaleTimeString() : "offline";
+  el.className = ok ? "" : "down";
 }
 tick(); setInterval(tick, 5000);
 </script>

@@ -29,7 +29,7 @@ c.pCO controller @ 192.168.1.69
 
 | Route      | Serves                                                                  |
 |------------|-------------------------------------------------------------------------|
-| `/`        | HMI-style page: glycol loop hero, per-circuit cards with fan/EEV meters, pump/flow pills, raw-register table under a disclosure; re-renders in place every 5 s |
+| `/`        | Minimal Linear-inspired page: glycol in→out hero, per-circuit columns with fan/EEV meters, pump/flow status dots, raw-register table under a disclosure; re-renders in place every 5 s |
 | `/api`     | JSON `{addr: raw_uint16}` of INPUT registers 0..159                     |
 | `/api/web` | JSON `{label: value}` of the 12 web-only points (engineering units)     |
 | `/api/all` | `{"regs": ..., "web": ...}` combined payload the page's refresh loop uses |
