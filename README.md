@@ -27,11 +27,12 @@ c.pCO controller @ 192.168.1.69
 ./.venv/bin/uvicorn chiller_dashboard:app --host 0.0.0.0 --port 8000
 ```
 
-| Route      | Serves                                                                 |
-|------------|------------------------------------------------------------------------|
-| `/`        | Auto-refreshing HTML table: labeled Modbus registers + `web` rows      |
-| `/api`     | JSON `{addr: raw_uint16}` of INPUT registers 0..159                    |
-| `/api/web` | JSON `{label: value}` of the 12 web-only points (engineering units)    |
+| Route      | Serves                                                                  |
+|------------|-------------------------------------------------------------------------|
+| `/`        | HMI-style page: glycol loop hero, per-circuit cards with fan/EEV meters, pump/flow pills, raw-register table under a disclosure; re-renders in place every 5 s |
+| `/api`     | JSON `{addr: raw_uint16}` of INPUT registers 0..159                     |
+| `/api/web` | JSON `{label: value}` of the 12 web-only points (engineering units)     |
+| `/api/all` | `{"regs": ..., "web": ...}` combined payload the page's refresh loop uses |
 
 `CHILLER_IP` overrides the target (default 192.168.1.69); `CHILLER_REGS` the read span
 (default 160). Deps: `pip install fastapi uvicorn pymodbus` (already in `.venv`).
