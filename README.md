@@ -1,8 +1,9 @@
 # Chiller — G&D glycol chiller monitoring
 
 Read-only monitoring of a G&D glycol chiller (Carel c.pCO controller, two refrigeration
-circuits) at a remote site. A FastAPI dashboard reads live data over two interfaces the
-controller exposes on its Ethernet port and serves it as a web page + JSON API.
+circuits) at a remote site. A Node.js dashboard (`node:http`, no framework) reads live
+data over two interfaces the controller exposes on its Ethernet port and serves it as a
+web page + JSON API.
 
 ```
 Mac (home LAN 192.168.4.0/22)
@@ -24,7 +25,8 @@ c.pCO controller @ 192.168.1.69
 ./teleport_split.sh          # sudo; re-run after every Teleport reconnect
 
 # 2. Run the dashboard
-./.venv/bin/uvicorn chiller_dashboard:app --host 0.0.0.0 --port 8000
+npm install        # one-time; installs modbus-serial
+npm start          # CHILLER_IP=... PORT=... node chiller_dashboard.js
 ```
 
 | Route      | Serves                                                                  |
@@ -35,8 +37,9 @@ c.pCO controller @ 192.168.1.69
 | `/api/all` | `{"regs": ..., "web": ...}` combined payload the page's refresh loop uses |
 
 `CHILLER_IP` overrides the target (default 192.168.1.69); `CHILLER_REGS` the read span
-(default 160). Deps: `pip install fastapi uvicorn pymodbus` (already in `.venv`).
-Auth is deliberately absent — Cloudflare Access is the intended front when exposed.
+(default 160); `PORT` the listen port (default 8000). Needs Node 18+ (uses native
+`fetch`); the only dependency is `modbus-serial`. Auth is deliberately absent —
+Cloudflare Access is the intended front when exposed.
 
 ## How the two data sources work
 
@@ -58,7 +61,7 @@ variable index, NOT a Modbus address (tested: registers at those addresses are z
 ## Register map (confirmed 2026-07-04, chiller running)
 
 Layout: circuit 1 at 0–28, circuit 2 mirrors it at 32–56, glycol block at 68/69/132,
-hour counters from 131. Full map lives in `LABELS` in `chiller_dashboard.py`:
+hour counters from 131. Full map lives in `LABELS` in `chiller_dashboard.js`:
 
 | INPUT reg | Point                              | reg | Point (circuit 2 mirror)    |
 |-----------|-----------------------------------|-----|------------------------------|
@@ -90,7 +93,9 @@ same value at one instant (four of the old labels were wrong that way). The corr
 instead samples `getvar.csv` and a register dump together, repeatedly, while the
 chiller runs: a register earns a variable's label only if it tracks that variable's
 value (REAL: |var×10 − raw| ≤ 2; ints exact) across **every** sample. Drifting values
-make coincidences die within a few rounds. Re-run anytime:
+make coincidences die within a few rounds. This is the one remaining Python script (a
+one-off discovery tool; its result is already baked into `LABELS`). Re-run anytime with
+a Python venv that has `pymodbus`:
 
 ```sh
 ./.venv/bin/python correlate_registers.py     # ROUNDS/INTERVAL/CHILLER_IP env-tunable
@@ -168,9 +173,11 @@ remove the VPN requirement entirely for reads.
 
 ## Files
 
-- `chiller_dashboard.py` — the dashboard: Modbus reads (`read`, `scale`, `LABELS`),
-  web-var reads (`WEB_VARS`, `read_web`), setpoint read, FastAPI routes. Self-check:
-  `python chiller_dashboard.py` prints `ok`.
-- `correlate_registers.py` — register↔variable mapper (above).
+- `chiller_dashboard.js` — the dashboard: Modbus reads (`read`, `scale`, `LABELS`),
+  web-var reads (`WEB_VARS`, `readWeb`), `node:http` routes. No framework.
+- `dashboard.html` — the page (HTML/CSS/client JS); served verbatim at `/`.
+- `package.json` — declares the one dependency (`modbus-serial`) and `start`/`test`.
+- `test.js` — offline self-check (scale/sign, CSV row parse, page wiring). `npm test`.
+- `correlate_registers.py` — register↔variable mapper (above); the only Python left.
 - `teleport_split.sh` — Teleport split-tunnel fix (above).
 - `find_registers.py` — superseded single-snapshot matcher; safe to delete.
