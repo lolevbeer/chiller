@@ -113,6 +113,43 @@ half-range routes and adds `192.168.1.0/24` via the tunnel interface. Internet f
 direct again; only chiller traffic uses the VPN. WiFiman reinstalls its routes on every
 reconnect, so re-run the script each time.
 
+### Teleport tunnel — anatomy and operation
+
+Teleport is Ubiquiti's zero-config WireGuard VPN (WiFiman app ↔ UniFi gateway). It
+NAT-traverses via UI's cloud brokering, which is why it connects through the site's
+double NAT that plain WireGuard cannot (no port forward needed).
+
+What connecting actually does on the Mac (verified by diag capture, 2026-07-04):
+
+| Change | Detail |
+|--------|--------|
+| Tunnel interface | new `utunN`; client addr on `192.168.2.0/24`, tunnel gateway `192.168.2.1` |
+| `0/1` + `128.0/1` routes → `utunN` | the full-tunnel mechanism: together they cover all IPv4 and are more specific than `default`, which is left untouched — `route get default` still shows en0 (this fooled the first version of the script) |
+| Host route `24.3.243.191 → en0` | pins the encrypted transport to the site's public IP via the real interface; this is why deleting the half-range routes doesn't kill the tunnel itself |
+| DNS | untouched — resolvers stay on the home interface |
+
+Consequence when connected raw: every packet (including `api.anthropic.com`) is routed
+into the tunnel, so Claude/most internet dies while the chiller becomes reachable.
+
+`teleport_split.sh` (run AFTER connecting, needs sudo):
+1. Finds the tunnel interface by looking up which `utunN` owns the `0/1` route —
+   errors out with "No 0/1 tunnel route found" if Teleport isn't really connected.
+2. `route delete 0.0.0.0/1` and `128.0.0.0/1` — internet falls back to the untouched
+   `default` via the home LAN.
+3. `route add 192.168.1.0/24 -interface utunN` — only the chiller site rides the tunnel.
+
+Routine: connect Teleport in WiFiman → `./teleport_split.sh` → `ping 192.168.1.69`.
+Re-run the script after **every** reconnect; WiFiman reinstalls its routes each time.
+
+Troubleshooting:
+- Script says "No 0/1 tunnel route found" → Teleport isn't actually passing traffic,
+  whatever the WiFiman UI claims. Fully quit WiFiman (menu-bar item too) and reconnect;
+  a reboot clears a wedged VPN network-extension.
+- Everything dead mid-session → Teleport reconnected on its own and reinstalled the
+  half-range routes; just run the script again.
+- Check the site itself at [unifi.ui.com](https://unifi.ui.com) (cloud, works without
+  VPN) — if the console is offline, nothing on this Mac will help.
+
 ### Abandoned: UniFi WireGuard VPN server (reference)
 
 A WireGuard server on the site gateway (port 51830; 51820 taken by Teleport) with a
