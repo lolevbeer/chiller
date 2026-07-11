@@ -25,21 +25,33 @@ c.pCO controller @ 192.168.1.69
 ./teleport_split.sh          # sudo; re-run after every Teleport reconnect
 
 # 2. Run the dashboard
-npm install        # one-time; installs modbus-serial
+npm install        # one-time; installs modbus-serial + uplot
 npm start          # CHILLER_IP=... PORT=... node chiller_dashboard.js
 ```
 
 | Route      | Serves                                                                  |
 |------------|-------------------------------------------------------------------------|
-| `/`        | Minimal Linear-inspired page: glycol in→out hero, per-circuit columns with fan/EEV meters, pump/flow status dots, raw-register table under a disclosure; re-renders in place every 5 s |
+| `/`        | Minimal Linear-inspired page: glycol in→out hero, per-circuit columns with fan/EEV meters, pump/flow status dots, glycol history chart (6 h/24 h/7 d, dashed line = current setpoint — the log has no setpoint column, so no history for it), raw-register table under a disclosure; re-renders in place every 5 s |
 | `/api`     | JSON `{addr: raw_uint16}` of INPUT registers 0..159                     |
 | `/api/web` | JSON `{label: value}` of the 12 web-only points (engineering units)     |
 | `/api/all` | `{"regs": ..., "web": ...}` combined payload the page's refresh loop uses |
+| `/api/log` | CSV pass-through of the controller's onboard datalogger (`?start=&stop=` in `YYYY-MM-DDThh:mm:ss`); feeds the history chart |
+| `/uplot.js` `/uplot.css` | [uPlot](https://github.com/leeoniya/uPlot) assets, vendored from `node_modules` (no CDN) |
 
 `CHILLER_IP` overrides the target (default 192.168.1.69); `CHILLER_REGS` the read span
 (default 160); `PORT` the listen port (default 8000). Needs Node 18+ (uses native
-`fetch`); the only dependency is `modbus-serial`. Auth is deliberately absent —
+`fetch`); dependencies are `modbus-serial` and `uplot`. Auth is deliberately absent —
 Cloudflare Access is the intended front when exposed.
+
+Env vars can live in a gitignored `.env` next to the code (`KEY=value` lines, loaded
+natively via `process.loadEnvFile()` — no dotenv). The webhook URL belongs there, not
+in the repo or shell history.
+
+Set `SLACK_WEBHOOK_URL` (a Slack Incoming Webhook) and the dashboard also posts the
+glycol temps — in/out, setpoint, reservoir — every 10 minutes (`SLACK_EVERY_MIN`
+overrides), plus once at startup so a bad webhook fails loudly. Glycol-out colors the
+message bar: green below 30 °F, red above 40 °F, plain between. A failed Modbus read
+posts one warning per outage, then goes quiet until it recovers. Unset = feature off.
 
 ## How the two data sources work
 
@@ -57,6 +69,19 @@ gzipped). Filtering is exact-name only, but the `name` param repeats:
 dashboard gets the points missing from the TCP map (`WEB_VARS` → `read_web()`).
 Values arrive in engineering units — no ×10. The `id` column is the internal PLC
 variable index, NOT a Modbus address (tested: registers at those addresses are zero).
+
+**Onboard datalogger (`getlog.csv`).** The controller runs one log, `GandDLog04162024`
+(id 0, defined in G&D's application via c.design; not editable from the webkit).
+It samples 24 points every 5 s — glycol in/out/supply temps, suction temps, all
+pressures, comp/fan states, flow — in **metric units** (°C, bar), unlike the ×10-°F
+Modbus map. `getlogids.csv` lists logs; `getlog.csv?id=0&start=…&stop=…`
+(`YYYY-MM-DDThh:mm:ss`) exports CSV. Quirk: rows are stamped `+00:00` but the clock
+runs site-local time — the dashboard parses them as local wall-clock. The log sat
+dead from a 2026-04-15 service visit (`Stop` event) until 2026-07-11: visiting the
+controller's system menu (hold Alarm+Enter 3 s on the pGD or the `/pgd/index.htm`
+virtual display) → LOGGER re-armed it, even though RESTART LOGS claimed "no logs to
+restart". If the chart goes flat, check for a new `Stop` event and repeat that.
+The controller also charts this log itself at `http://<ip>/logger.htm`.
 
 ## Register map (confirmed 2026-07-04, chiller running)
 
@@ -174,9 +199,12 @@ remove the VPN requirement entirely for reads.
 ## Files
 
 - `chiller_dashboard.js` — the dashboard: Modbus reads (`read`, `scale`, `LABELS`),
-  web-var reads (`WEB_VARS`, `readWeb`), `node:http` routes. No framework.
-- `dashboard.html` — the page (HTML/CSS/client JS); served verbatim at `/`.
-- `package.json` — declares the one dependency (`modbus-serial`) and `start`/`test`.
+  web-var reads (`WEB_VARS`, `readWeb`), datalogger proxy (`readLog`), `node:http`
+  routes. No framework.
+- `dashboard.html` — the page (HTML/CSS/client JS), including the uPlot history
+  chart; served verbatim at `/`.
+- `package.json` — declares the two dependencies (`modbus-serial`, `uplot`) and
+  `start`/`test`.
 - `test.js` — offline self-check (scale/sign, CSV row parse, page wiring). `npm test`.
 - `correlate_registers.py` — register↔variable mapper (above); the only Python left.
 - `teleport_split.sh` — Teleport split-tunnel fix (above).

@@ -3,13 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Glycol Chiller</title>
+<title>Lolev Chiller Monitor</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="/uplot.css" rel="stylesheet">
+<script src="/uplot.js"></script>
 <style>
 :root {
   --bg: #08090c; --line: #1b1d23; --ink: #e2e4ea; --mut: #8a8f98; --dim: #62666e;
   --accent: #7b86e0; --ok: #4cb782; --warn: #d9a132; --bad: #eb5757;
+  --hist-in: #d55181; /* history chart "glycol in" series; "out" reuses --accent (CVD-validated pair) */
 }
 * { box-sizing: border-box; margin: 0; }
 body {
@@ -20,6 +23,7 @@ body {
 }
 section { padding: 20px 0; border-bottom: 1px solid var(--line); }
 header { display: flex; align-items: center; gap: 10px; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+header .logo { height: 22px; width: auto; flex: none; color: var(--ink); }
 h1 { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
 .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
@@ -47,6 +51,13 @@ h2 { font-size: 13px; font-weight: 600; color: var(--ink); display: flex; align-
 .pills span { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--mut); }
 .hours { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 12px; font-size: 12px; color: var(--dim); }
 .hours b { color: var(--mut); font-weight: 500; }
+#ranges { display: flex; gap: 6px; margin-left: auto; }
+#ranges button { background: none; border: 1px solid var(--line); color: var(--mut);
+  font: 500 12px "Inter", sans-serif; padding: 3px 10px; border-radius: 5px; cursor: pointer; }
+#ranges button.on { color: var(--ink); border-color: var(--dim); }
+#chart { margin-top: 4px; min-height: 220px; }
+#chart .msg { color: var(--dim); font-size: 13px; padding: 90px 0; text-align: center; }
+.u-legend { font: 400 12px "Inter", sans-serif !important; color: var(--mut) !important; }
 details { padding-top: 18px; color: var(--dim); font-size: 13px; }
 summary { cursor: pointer; }
 details table { border-collapse: collapse; margin-top: 10px; font-size: 12px; }
@@ -56,7 +67,14 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
 </head>
 <body>
 <header>
-  <h1>Glycol Chiller</h1>
+  <!-- Lolev Beer logo (Logo2025.svg), inlined with currentColor so it follows the theme -->
+  <svg class="logo" viewBox="0 0 480 525" fill="currentColor" aria-label="Lolev Beer">
+    <g transform="translate(0.891391, 0.103758)">
+      <path d="M363.929591,32.8777392 C364.344591,32.1837392 373.280532,19.2163374 388.370735,0 C376.743913,20.4138491 372.271401,29.840822 368.792621,35.6612382 C372.680139,31.884489 381.914097,29.7992254 393.519908,33.2747636 C385.598474,46.5188585 375.595458,50.9180619 363.510861,46.4723735 C360.291902,50.4420376 359.938734,54.3116485 358.129504,57.2137438 C366.054944,53.4594853 379.08283,51.8025648 398.155558,59.5296401 C385.122113,86.6663342 352.61807,81.6996899 350.471525,74.8739529 C347.243501,79.9995012 346.217609,85.02651 344.608609,88.82651 C353.973736,76.6445197 386.731624,82.084775 393.519908,88.82651 C389.47655,110.319379 362.004018,125.933136 336.795351,110.761612 C334.290082,120.611608 332.110733,127.458167 330.687179,137.415307 C331.098139,136.944067 340.035463,119.507926 380.580352,128.286114 C374.342238,173.665359 330.276829,165.11021 327.349533,157.067079 C327.349533,163.816242 325.620843,172.657621 325.344035,192.116626 C332.895399,174.500908 361.011082,167.63506 368.792621,167.277299 C368.709009,170.618224 363.510861,236.04753 325.344035,236.04753 C325.344035,246.891089 325.77485,250.649452 329.112496,262.448121 C332.219654,253.440489 340.035463,247.721568 350.471525,244.111908 C344.608609,265.323548 342.785046,283.277292 351.885115,295.601205 C366.976216,313.523162 389.088417,322.505792 401.401209,329.310436 C413.081517,335.765537 426.297773,341.55226 449.284944,359.322165 C493.25129,394.335583 474.767429,512.340658 472.710011,524.899354 C463.388027,524.667526 457.843894,524.667526 456.077609,524.899354 C456.077609,524.899354 451.962911,524.899354 443.733513,524.899354 C451.633394,471.058728 449.284944,442.417353 449.284944,442.417353 C395.008832,480.26246 347.999951,442.397625 330.687179,420.740305 C343.679465,396.386805 395.081324,366.486047 435.744337,379.361739 C432.064621,371.503301 418.29624,362.87764 404.147409,355.917483 C355.791756,392.814661 299.281229,387.13941 268.873482,344.738506 C292.660132,323.708433 319.792225,314.777033 344.608609,323.708433 C336.838609,317.494016 330.687179,311.039435 327.349533,304.98216 C261.322118,336.538708 251.259675,265.664522 252.040246,250.391172 C267.665252,248.638274 296.126648,251.385838 308.808961,262.448121 C305.440593,250.391172 305.447593,238.945324 305.440593,238.919324 C284.565936,247.721972 252.215658,219.922711 258.079609,163.816242 C290.642446,171.810075 299.327648,175.757077 305.440593,189.91132 C305.440593,175.538288 307.224323,167.277299 308.808961,157.067079 C277.161744,163.128092 261.801482,136.207764 268.873482,101.662764 C273.147836,100.329764 306.411678,98.0453624 316.243678,131.66517 C317.7941,116.39572 325.340806,104.347741 325.344035,104.33972 C303.42328,108.332846 281.802526,80.8489886 297.225085,54.0079696 C312.527733,59.6177941 328.317615,69.1732662 330.687179,89.7503753 C330.786179,89.5396253 335.020478,79.3505768 341.911566,69.1732662 C332.989738,68.0282134 312.398609,59.5296401 323.472609,28.8402421 C336.172777,33.9666583 346.428177,37.9766709 349.61198,55.2684735 C352.23705,50.6801921 354.309428,47.9220162 358.129504,42.3092245 C341.084559,36.2655252 350.038493,19.2163374 356.376493,9.58033745 C363.635971,16.3662086 366.15367,24.1320092 363.929591,32.8777392 Z" transform="translate(365.153882, 262.449677) scale(-1, 1) translate(-365.153882, -262.449677)"></path>
+      <path d="M111.929591,32.8777392 C112.344591,32.1837392 121.280532,19.2163374 136.370735,0 C124.743913,20.4138491 120.271401,29.840822 116.792621,35.6612382 C120.680139,31.884489 129.914097,29.7992254 141.519908,33.2747636 C133.598474,46.5188585 123.595458,50.9180619 111.510861,46.4723735 C108.291902,50.4420376 107.938734,54.3116485 106.129504,57.2137438 C114.054944,53.4594853 127.08283,51.8025648 146.155558,59.5296401 C133.122113,86.6663342 100.61807,81.6996899 98.4715254,74.8739529 C95.2435006,79.9995012 94.2176095,85.02651 92.6086095,88.82651 C101.973736,76.6445197 134.731624,82.084775 141.519908,88.82651 C137.47655,110.319379 110.004018,125.933136 84.795351,110.761612 C82.2900823,120.611608 80.1107331,127.458167 78.6871789,137.415307 C79.0981389,136.944067 88.0354626,119.507926 128.580352,128.286114 C122.342238,173.665359 78.2768286,165.11021 75.3495328,157.067079 C75.3495328,163.816242 73.6208426,172.657621 73.3440353,192.116626 C80.895399,174.500908 109.011082,167.63506 116.792621,167.277299 C116.709009,170.618224 111.510861,236.04753 73.3440353,236.04753 C73.3440353,246.891089 73.7748503,250.649452 77.1124964,262.448121 C80.2196536,253.440489 88.0354626,247.721568 98.4715254,244.111908 C92.6086095,265.323548 90.785046,283.277292 99.885115,295.601205 C114.976216,313.523162 137.088417,322.505792 149.401209,329.310436 C161.081517,335.765537 174.297773,341.55226 197.284944,359.322165 C241.25129,394.335583 222.767429,512.340658 220.710011,524.899354 C211.388027,524.667526 205.843894,524.667526 204.077609,524.899354 C204.077609,524.899354 199.962911,524.899354 191.733513,524.899354 C199.633394,471.058728 197.284944,442.417353 197.284944,442.417353 C143.008832,480.26246 95.9999505,442.397625 78.6871789,420.740305 C91.6794648,396.386805 143.081324,366.486047 183.744337,379.361739 C180.064621,371.503301 166.29624,362.87764 152.147409,355.917483 C103.791756,392.814661 47.2812287,387.13941 16.8734817,344.738506 C40.660132,323.708433 67.7922252,314.777033 92.6086095,323.708433 C84.8386095,317.494016 78.6871789,311.039435 75.3495328,304.98216 C9.32211792,336.538708 -0.740324889,265.664522 0.0402460043,250.391172 C15.665252,248.638274 44.1266483,251.385838 56.8089607,262.448121 C53.4405929,250.391172 53.4475929,238.945324 53.4405929,238.919324 C32.5659359,247.721972 0.215657826,219.922711 6.07960947,163.816242 C38.6424458,171.810075 47.3276484,175.757077 53.4405929,189.91132 C53.4405929,175.538288 55.224323,167.277299 56.8089607,157.067079 C25.1617439,163.128092 9.80148168,136.207764 16.8734817,101.662764 C21.1478361,100.329764 54.4116776,98.0453624 64.2436776,131.66517 C65.7940996,116.39572 73.3408061,104.347741 73.3440353,104.33972 C51.4232803,108.332846 29.8025262,80.8489886 45.2250848,54.0079696 C60.5277326,59.6177941 76.3176147,69.1732662 78.6871789,89.7503753 C78.7861789,89.5396253 83.0204778,79.3505768 89.9115659,69.1732662 C80.9897378,68.0282134 60.3986095,59.5296401 71.4726095,28.8402421 C84.1727771,33.9666583 94.4281768,37.9766709 97.6119802,55.2684735 C100.23705,50.6801921 102.309428,47.9220162 106.129504,42.3092245 C89.0845593,36.2655252 98.0384929,19.2163374 104.376493,9.58033745 C111.635971,16.3662086 114.15367,24.1320092 111.929591,32.8777392 Z"></path>
+    </g>
+  </svg>
+  <h1>Lolev Chiller Monitor</h1>
   <span id="stat"><span class="dot" id="statdot"></span><span id="stattxt">connecting</span></span>
   <span id="net"></span>
 </header>
@@ -105,8 +123,17 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
   <div class="hours" id="hours"></div>
 </section>
 
+<section id="hist">
+  <h2>Glycol history<span id="ranges">
+    <button data-h="6" class="on">6 h</button>
+    <button data-h="24">24 h</button>
+    <button data-h="168">7 d</button>
+  </span></h2>
+  <div id="chart"></div>
+</section>
+
 <details><summary>Raw registers</summary><table id="raw"></table></details>
-<footer>Read-only · Modbus TCP + getvar.csv · refreshes every 5 s</footer>
+<footer>Read-only · Modbus TCP + getvar.csv + onboard datalogger · refreshes every 5 s</footer>
 
 <script>
 const S = v => (v > 32767 ? v - 65536 : v) / 10;          // signed int16, ×10
@@ -130,6 +157,7 @@ async function tick() {
 
   set("glyIn", r(69).toFixed(1)); set("glyOut", r(68).toFixed(1));
   set("setp", r(70).toFixed(1) + " °F"); set("resT", r(132).toFixed(1) + " °F");
+  histSetp = r(70); // feeds the history chart's setpoint reference line
   set("supP", (w["Glycol supply pres psi"] ?? NaN).toFixed(1) + " psi");
   set("pwr", (d.regs[1] / 10).toFixed(0) + "%");
 
@@ -165,6 +193,92 @@ function net(ok) {
   el.className = ok ? "" : "down";
 }
 tick(); setInterval(tick, 5000);
+
+// --- Glycol history: the controller's onboard datalogger via /api/log ---
+// Log rows are °C and stamped "+00:00" even though the controller clock runs
+// site-local time, so timestamps are parsed as local wall-clock (Mac and site
+// are assumed to share a timezone) and temps converted to °F to match the page.
+const F = c => c * 9 / 5 + 32;
+const pad = n => String(n).padStart(2, "0");
+const tstr = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T` +
+                  `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+
+async function loadHist(hours) {
+  // -> uPlot data [[unix ts], [in °F], [out °F]], or null on failure.
+  // stop is padded +1 h: the controller clock drifts fast (~25 min ahead as of
+  // 2026-07-11), and rows stamped past "now" would otherwise be silently dropped.
+  const now = Date.now();
+  const stop = new Date(now + 3600e3), start = new Date(now - hours * 3600e3);
+  let text;
+  try { text = await (await fetch(`/api/log?start=${tstr(start)}&stop=${tstr(stop)}`)).text(); }
+  catch { return null; }
+  const rows = text.trim().split(/\r?\n/); // controller CSV is CRLF
+  const head = (rows.shift() || "").split(",").map(s => s.replace(/"/g, ""));
+  const iT = head.indexOf("TIME"), iIn = head.indexOf("W_InTempUser"), iOut = head.indexOf("W_OutTempUser");
+  if (iT < 0 || iIn < 0 || iOut < 0) return null;
+  const xs = [], ins = [], outs = [];
+  for (const line of rows) {
+    const c = line.split(",");
+    if (c.length < head.length) continue;
+    const t = new Date(c[iT].slice(0, 19)).getTime() / 1000; // strip +00:00, parse as local
+    if (!isFinite(t)) continue;
+    if (xs.length && t - xs[xs.length - 1] > 900) {          // >15 min hole: break the line
+      xs.push(t - 1); ins.push(null); outs.push(null);
+    }
+    xs.push(t); ins.push(F(parseFloat(c[iIn]))); outs.push(F(parseFloat(c[iOut])));
+  }
+  return [xs, ins, outs];
+}
+
+// Current cooling setpoint (Modbus reg 70, °F), set by tick(). Drawn as a flat
+// dashed reference across the window — the datalogger has no setpoint column,
+// so past setpoint changes aren't recorded; only "where it should be now".
+let histSetp = null;
+
+let histChart, histHours = 6;
+function drawHist(data) {
+  const el = $("chart");
+  if (histChart) { histChart.destroy(); histChart = null; }
+  if (!data || !data[0].length) {
+    el.innerHTML = '<div class="msg">no log data for this range</div>';
+    return;
+  }
+  el.innerHTML = "";
+  const css = getComputedStyle(document.documentElement);
+  const v = p => css.getPropertyValue(p).trim();
+  const axis = { stroke: v("--dim"), grid: { stroke: v("--line"), width: 1 },
+                 ticks: { stroke: v("--line"), width: 1 }, font: '12px "Inter", sans-serif' };
+  const degF = (u, x) => (x == null ? "–" : x.toFixed(1) + " °F");
+  histChart = new uPlot({
+    width: el.clientWidth, height: 220,
+    series: [
+      {},
+      { label: "In",  stroke: v("--hist-in"), width: 2, value: degF },
+      { label: "Out", stroke: v("--accent"),  width: 2, value: degF },
+      { label: "Setpoint", stroke: v("--mut"), width: 1, dash: [4, 4], value: degF },
+    ],
+    axes: [axis, { ...axis, size: 46 }],
+  }, [...data, data[0].map(() => histSetp)], el);
+}
+
+function histLoading() {
+  // shown on initial load and range switches; the 60 s refresh redraws in place instead
+  if (histChart) { histChart.destroy(); histChart = null; }
+  $("chart").innerHTML = '<div class="msg">loading log…</div>';
+}
+
+$("ranges").onclick = async e => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  for (const x of b.parentNode.children) x.classList.toggle("on", x === b);
+  histHours = +b.dataset.h;
+  histLoading();
+  drawHist(await loadHist(histHours));
+};
+addEventListener("resize", () => histChart && histChart.setSize({ width: $("chart").clientWidth, height: 220 }));
+histLoading();
+loadHist(histHours).then(drawHist);
+setInterval(async () => drawHist(await loadHist(histHours)), 60000);
 </script>
 </body>
 </html>

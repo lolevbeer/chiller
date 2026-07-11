@@ -9,6 +9,7 @@
     "test": "node test.js"
   },
   "dependencies": {
-    "modbus-serial": "^8.0.17"
+    "modbus-serial": "^8.0.17",
+    "uplot": "^1.6.32"
   }
 }

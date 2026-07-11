@@ -2,6 +2,7 @@
 // Cloudflare Access sits in front for auth; this app has no login of its own by design.
 // Run:  npm install
 //       CHILLER_IP=192.168.1.69 node chiller_dashboard.js   (PORT defaults to 8000)
+try { process.loadEnvFile(); } catch {} // optional .env (gitignored) — holds SLACK_WEBHOOK_URL etc.
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -109,7 +110,58 @@ async function readWeb() {
   }
 }
 
+// The controller's onboard datalogger (log id 0, "GandDLog04162024") exports CSV
+// at getlog.csv — glycol/suction temps (°C), pressures (bar), comp/fan states,
+// sampled every 5 s. Its clock runs site-local time but stamps rows "+00:00";
+// the page compensates by parsing timestamps as local wall-clock time.
+const TSTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/; // controller date format, also our param whitelist
+
+async function readLog(start, stop) {
+  // CSV pass-through from the controller; null on bad params or failure.
+  // Long timeout: the embedded server streams big ranges slowly.
+  if (!TSTAMP.test(start) || !TSTAMP.test(stop)) return null;
+  try {
+    const res = await fetch(`http://${HOST}/getlog.csv?id=0&start=${start}&stop=${stop}`,
+      { signal: AbortSignal.timeout(60000) });
+    return res.ok ? await res.text() : null;
+  } catch {
+    return null;
+  }
+}
+
+// Optional Slack reporter: set SLACK_WEBHOOK_URL (an Incoming Webhook) and the
+// glycol temps post every SLACK_EVERY_MIN minutes (default 10), plus once at
+// startup so a bad webhook shows up immediately.
+const SLACK_URL = process.env.SLACK_WEBHOOK_URL;
+const SLACK_EVERY_MIN = Number(process.env.SLACK_EVERY_MIN || 10);
+
+// Glycol-out drives the message's color bar: green below 30 °F, red above 40 °F
+// (Slack's legacy "good"/"danger" attachment colors), plain in between.
+const slackPayload = (regs) => {
+  const out = scale(regs[68]);
+  const text = `Glycol ${scale(regs[69])}°F in → ${out}°F out · setpoint ${scale(regs[70])}°F · reservoir ${scale(regs[132])}°F`;
+  const color = out < 30 ? "good" : out > 40 ? "danger" : null;
+  return color ? { attachments: [{ color, text }] } : { text };
+};
+
+let slackDown = false; // one failure warning per outage, not one per tick
+async function slackReport() {
+  const regs = await read();
+  if (!regs && slackDown) return;
+  slackDown = !regs;
+  const body = regs ? slackPayload(regs)
+    : { text: "⚠️ Chiller Modbus read failed — temps resume when it recovers" };
+  await fetch(SLACK_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).catch((e) => console.error("slack post failed:", e.message));
+}
+
 const PAGE = fs.readFileSync(path.join(__dirname, "dashboard.html"), "utf8");
+// uPlot renders the history chart; vendored from node_modules so the page has no CDN dependency.
+const UPLOT_JS = fs.readFileSync(require.resolve("uplot/dist/uPlot.iife.min.js"));
+const UPLOT_CSS = fs.readFileSync(require.resolve("uplot/dist/uPlot.min.css"));
 
 async function handle(req, res) {
   const url = req.url.split("?")[0];
@@ -120,6 +172,26 @@ async function handle(req, res) {
   if (url === "/") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     return res.end(PAGE);
+  }
+  if (url === "/uplot.js") {
+    res.writeHead(200, { "Content-Type": "text/javascript" });
+    return res.end(UPLOT_JS);
+  }
+  if (url === "/uplot.css") {
+    res.writeHead(200, { "Content-Type": "text/css" });
+    return res.end(UPLOT_CSS);
+  }
+  if (url === "/api/log") {
+    // History chart data: proxies the controller's datalogger CSV (browser can't
+    // fetch the chiller cross-origin). ?start=&stop= in YYYY-MM-DDThh:mm:ss.
+    const q = new URL(req.url, "http://x").searchParams;
+    const csv = await readLog(q.get("start") || "", q.get("stop") || "");
+    if (csv === null) {
+      res.writeHead(502, { "Content-Type": "text/plain" });
+      return res.end("log fetch failed");
+    }
+    res.writeHead(200, { "Content-Type": "text/csv" });
+    return res.end(csv);
   }
   if (url === "/api") return json((await read()) || { error: "modbus read failed" });
   if (url === "/api/web") return json((await readWeb()) || { error: "getvar.csv fetch failed" });
@@ -136,6 +208,10 @@ if (require.main === module) {
   http.createServer(handle).listen(PORT, "0.0.0.0", () =>
     console.log(`chiller dashboard on http://0.0.0.0:${PORT}  (chiller ${HOST})`)
   );
+  if (SLACK_URL) {
+    slackReport();
+    setInterval(slackReport, SLACK_EVERY_MIN * 60 * 1000);
+  }
 }
 
-module.exports = { scale, read, readWeb, LABELS, WEB_VARS, ROW, PAGE };
+module.exports = { scale, read, readWeb, readLog, TSTAMP, LABELS, WEB_VARS, ROW, PAGE, slackPayload };
