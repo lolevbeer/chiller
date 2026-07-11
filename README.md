@@ -11,13 +11,17 @@ Mac (home LAN 192.168.4.0/22)
  ▼
 site LAN 192.168.1.0/24, behind UniFi gateway (double-NATed behind Comcast Business)
  │
+ ├── Raspberry Pi (hostname `chiller`) — runs this dashboard 24/7 as a systemd
+ │     service on :80 (see On-site host below); polls the controller over the LAN
  ▼
 c.pCO controller @ 192.168.1.69
  ├── Modbus TCP :502  — INPUT registers (FC4): temps, pressures, superheats, hours
  └── HTTP :80         — Carel microwebsite; getvar.csv exposes ALL ~4000 PLC variables
 ```
 
-## Quick start
+## Quick start (dev machine)
+
+The production copy runs on the on-site Pi (below); this is for hacking on it locally:
 
 ```sh
 # 1. Get on the site network (see Network access below)
@@ -54,6 +58,59 @@ message bar: green below 30 °F, red above 40 °F, plain between. A failed Modbu
 posts one warning per outage, then goes quiet until it recovers — except at startup,
 where a failed first read is suppressed (a service restart races the chiller still
 holding the old process's Modbus socket; warning there is pure noise). Unset = off.
+
+## On-site host (Raspberry Pi)
+
+Since 2026-07-11 the dashboard runs continuously on a Pi on the site LAN — an
+ARMv6 (Pi 1/Zero-class) board that was already there running OctoPrint, renamed
+`chiller` (so `http://chiller.local` on the site LAN — mDNS is link-local and does
+NOT cross the Teleport tunnel; from home, use the Pi's IP). It polls the controller
+over the local subnet, so Slack reporting works with no VPN in the loop.
+
+Setup notes, hard-won:
+
+- **Node on armv6l**: official/NodeSource builds don't exist for ARMv6 — use
+  [unofficial-builds.nodejs.org](https://unofficial-builds.nodejs.org) (v20.19.4,
+  `linux-armv6l`). Before extracting into `/usr/local`, **delete the old npm**
+  (`sudo rm -rf /usr/local/lib/node_modules/npm`): tar overwrites files but never
+  removes stale ones, and leftover nested deps from an ancient npm shadow the new
+  ones (`Class extends value undefined is not a constructor`, `Minipass is not a
+  constructor`). Verify the tarball before extracting (`tar -tJf … && echo OK`) —
+  extraction takes 5–10 quiet minutes on ARMv6; don't interrupt it.
+- **Raspbian Buster is EOL**: apt 404s until repointed —
+  `sudo sed -i 's|raspbian.raspberrypi.org|legacy.raspbian.org|' /etc/apt/sources.list`
+  then `sudo apt update --allow-releaseinfo-change`.
+- **systemd service** `/etc/systemd/system/chiller.service`, enabled at boot:
+
+  ```ini
+  [Unit]
+  Description=Chiller dashboard
+  After=network-online.target
+  Wants=network-online.target
+
+  [Service]
+  WorkingDirectory=/home/pi/chiller
+  Environment=CHILLER_IP=192.168.1.69
+  Environment=PORT=80
+  AmbientCapabilities=CAP_NET_BIND_SERVICE
+  EnvironmentFile=-/home/pi/chiller/.env
+  ExecStart=/usr/local/bin/node chiller_dashboard.js
+  Restart=always
+  User=pi
+
+  [Install]
+  WantedBy=multi-user.target
+  ```
+
+  `AmbientCapabilities` is what lets a non-root unit bind port 80. OctoPi's
+  haproxy previously owned :80 (proxying the OctoPrint UI) — it's disabled
+  (`systemctl disable --now haproxy`); re-enable it and drop the two port lines
+  to get OctoPrint's UI back.
+- **Deploy loop**: commit+push here, then on the Pi
+  `cd ~/chiller && git pull && sudo systemctl restart chiller`
+  (`npm install` first only if `package.json` changed).
+- **Debugging**: `journalctl -u chiller -n 30` for crashes;
+  `curl -s localhost/api | head -c 60` proves the Modbus path end-to-end.
 
 ## How the two data sources work
 
@@ -195,8 +252,8 @@ keep out of the repo).
 
 ### Future
 
-An on-site box running the dashboard behind `cloudflared` + Cloudflare Access would
-remove the VPN requirement entirely for reads.
+The on-site box now exists (the Pi, above). Remaining step: `cloudflared` +
+Cloudflare Access in front of it would remove the VPN requirement entirely for reads.
 
 ## Files
 
