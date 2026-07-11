@@ -191,7 +191,7 @@ async function logLoop() {
 
 // Optional Slack reporter: set SLACK_WEBHOOK_URL (an Incoming Webhook) and the
 // glycol temps post every SLACK_EVERY_MIN minutes (default 10), plus once at
-// startup so a bad webhook shows up immediately.
+// startup — if that first read succeeds — so a bad webhook shows up quickly.
 const SLACK_URL = process.env.SLACK_WEBHOOK_URL;
 const SLACK_EVERY_MIN = Number(process.env.SLACK_EVERY_MIN || 10);
 
@@ -204,7 +204,12 @@ const slackPayload = (regs) => {
   return color ? { attachments: [{ color, text }] } : { text };
 };
 
-let slackDown = false; // one failure warning per outage, not one per tick
+// One failure warning per outage, not one per tick. Starts true so the startup
+// tick can't post a spurious warning: right after a service restart the chiller
+// often still holds the dead process's Modbus socket, so the first read loses
+// that race. Cost: an outage already in progress at boot isn't announced until
+// after the first successful read.
+let slackDown = true;
 async function slackReport() {
   const regs = await read();
   if (!regs && slackDown) return;

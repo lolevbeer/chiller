@@ -51,7 +51,9 @@ Set `SLACK_WEBHOOK_URL` (a Slack Incoming Webhook) and the dashboard also posts 
 glycol temps — in/out, setpoint, reservoir — every 10 minutes (`SLACK_EVERY_MIN`
 overrides), plus once at startup so a bad webhook fails loudly. Glycol-out colors the
 message bar: green below 30 °F, red above 40 °F, plain between. A failed Modbus read
-posts one warning per outage, then goes quiet until it recovers. Unset = feature off.
+posts one warning per outage, then goes quiet until it recovers — except at startup,
+where a failed first read is suppressed (a service restart races the chiller still
+holding the old process's Modbus socket; warning there is pure noise). Unset = off.
 
 ## How the two data sources work
 
