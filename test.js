@@ -1,7 +1,7 @@
 // Offline self-check for scale/sign logic, getvar.csv row parsing, and page wiring
 // (no device needed).  Run: node test.js
 const assert = require("node:assert");
-const { scale, ROW, WEB_VARS, PAGE, TSTAMP, slackPayload } = require("./chiller_dashboard.js");
+const { scale, ROW, WEB_VARS, PAGE, TSTAMP, slackPayload, logInsert, logSlice } = require("./chiller_dashboard.js");
 
 assert.strictEqual(scale(270), 27.0);
 assert.strictEqual(scale(65516), -2.0); // negative temp wraps correctly
@@ -33,8 +33,25 @@ assert.strictEqual(
 assert.strictEqual(slackPayload({ 68: 401, 69: 442, 70: 400, 132: 413 }).attachments[0].color, "danger");
 assert.ok(slackPayload({ 68: 351, 69: 442, 70: 400, 132: 413 }).text.includes("35.1°F out")); // no attachment in band
 
-// history chart wiring: uplot assets, section, and the log columns the page reads
-for (const anchor of ["/uplot.js", "/api/log", "W_InTempUser", "W_OutTempUser", "ranges"]) {
+// log cache: chunks merge deduped on timestamp, stay sorted; slice = header + window.
+// Timestamps built relative to now — logInsert trims rows older than its 7 d window.
+const pad = (n) => String(n).padStart(2, "0");
+const stamp = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T` +
+  `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+const t0 = new Date(Math.floor(Date.now() / 1000) * 1000 - 60e3); // whole seconds, a minute ago
+const at = (s) => new Date(t0.getTime() + s * 1000);
+const chunk = (...rows) => "TIME,EVENT,\"W_InTempUser\"\r\n" +
+  rows.map(([s, v]) => `${stamp(at(s))}+00:00,,${v}`).join("\r\n");
+assert.strictEqual(logInsert(chunk([5, 5.6], [10, 5.7])), 2);
+assert.strictEqual(logInsert(chunk([0, 5.5], [5, 9.9])), 1); // overlap at +5 s deduped
+const sliced = logSlice(at(0).getTime(), at(6).getTime()).split("\n");
+assert.strictEqual(sliced.length, 3); // header + rows at +0 s and +5 s
+assert.ok(sliced[0].startsWith("TIME") && sliced[1].includes("5.5") && sliced[2].includes("5.6"));
+
+// history chart wiring: uplot assets, section, the log columns the page reads,
+// and the backfill indicator fed by /api/log's X-Log-Progress header
+for (const anchor of ["/uplot.js", "/api/log", "W_InTempUser", "W_OutTempUser", "ranges",
+                      "histpct", "X-Log-Progress"]) {
   assert.ok(PAGE.includes(anchor), anchor);
 }
 console.log("ok");

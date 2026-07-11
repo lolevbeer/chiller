@@ -117,15 +117,75 @@ async function readWeb() {
 const TSTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/; // controller date format, also our param whitelist
 
 async function readLog(start, stop) {
-  // CSV pass-through from the controller; null on bad params or failure.
-  // Long timeout: the embedded server streams big ranges slowly.
+  // One raw CSV query to the controller; null on bad params or failure. Only the
+  // cache loop below calls this — measured 2026-07-11, the embedded server needs
+  // ~60 s per query before size even matters (1 h = 64 s, 6 h = 95 s), hence the
+  // 5 min timeout and why /api/log never hits it live.
   if (!TSTAMP.test(start) || !TSTAMP.test(stop)) return null;
   try {
     const res = await fetch(`http://${HOST}/getlog.csv?id=0&start=${start}&stop=${stop}`,
-      { signal: AbortSignal.timeout(60000) });
+      { signal: AbortSignal.timeout(300000) });
     return res.ok ? await res.text() : null;
   } catch {
     return null;
+  }
+}
+
+// --- Datalogger cache ---
+// logLoop() backfills the last LOG_DAYS newest-day-first (so the default 6 h
+// view fills after the first chunk), then polls only the tail — one controller
+// request in flight, ever. /api/log answers instantly from logCache and reports
+// backfill completion in an X-Log-Progress header (%, day-granularity) that the
+// page renders as its loading indicator.
+const LOG_DAYS = 7; // matches the page's longest range
+const LOG_POLL_MIN = Number(process.env.LOG_POLL_MIN || 5);
+const DAY = 86400e3, PAD = 3600e3; // PAD: controller clock runs fast (~25 min as of 2026-07-11)
+const logCache = []; // [tMs, csvLine] ascending; 7 d of 5 s samples ≈ 120k rows, ~30 MB
+let logHeader = "TIME"; // replaced by the real header on first chunk
+let logProgress = 0; // 0..1 backfill completion
+
+const pad2 = (n) => String(n).padStart(2, "0");
+const tstr = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T` +
+                    `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function logInsert(csv) {
+  // Merge one controller CSV chunk: dedupe on timestamp, keep ascending, trim
+  // to the LOG_DAYS window. Rows are stamped +00:00 but are wall-clock local
+  // (controller quirk), so the first 19 chars parse as local time.
+  if (!csv) return 0;
+  const rows = csv.trim().split(/\r?\n/);
+  logHeader = rows.shift() || logHeader;
+  const seen = new Set(logCache.map((r) => r[0])); // ponytail: O(n) rebuild per chunk; chunks arrive every few minutes
+  let added = 0;
+  for (const line of rows) {
+    const t = new Date(line.slice(0, 19)).getTime();
+    if (!isFinite(t) || seen.has(t)) continue;
+    seen.add(t);
+    logCache.push([t, line]);
+    added++;
+  }
+  if (added) logCache.sort((a, b) => a[0] - b[0]);
+  while (logCache.length && logCache[0][0] < Date.now() - LOG_DAYS * DAY - PAD) logCache.shift();
+  return added;
+}
+
+const logSlice = (t0, t1) => // CSV text for a [ms, ms] window, header always included
+  [logHeader, ...logCache.filter((r) => r[0] >= t0 && r[0] <= t1).map((r) => r[1])].join("\n");
+
+async function logLoop() {
+  for (let done = 0; done < LOG_DAYS; ) { // backfill, newest day first
+    const stop = Date.now() + PAD - done * DAY;
+    const csv = await readLog(tstr(new Date(stop - DAY - PAD)), tstr(new Date(stop)));
+    if (csv === null) { await sleep(60e3); continue; } // controller busy/offline — retry this chunk
+    logInsert(csv);
+    logProgress = ++done / LOG_DAYS;
+    await sleep(5e3); // breathe between minute-long queries
+  }
+  while (true) { // tail poll: only rows newer than the cache
+    await sleep(LOG_POLL_MIN * 60e3);
+    const last = logCache.length ? logCache[logCache.length - 1][0] : Date.now() - DAY;
+    logInsert(await readLog(tstr(new Date(last)), tstr(new Date(Date.now() + PAD))));
   }
 }
 
@@ -182,16 +242,17 @@ async function handle(req, res) {
     return res.end(UPLOT_CSS);
   }
   if (url === "/api/log") {
-    // History chart data: proxies the controller's datalogger CSV (browser can't
-    // fetch the chiller cross-origin). ?start=&stop= in YYYY-MM-DDThh:mm:ss.
+    // History chart data: instant slice of the in-process cache (see logLoop —
+    // the controller is far too slow to query per request). ?start=&stop= in
+    // YYYY-MM-DDThh:mm:ss local; X-Log-Progress header = backfill %.
     const q = new URL(req.url, "http://x").searchParams;
-    const csv = await readLog(q.get("start") || "", q.get("stop") || "");
-    if (csv === null) {
-      res.writeHead(502, { "Content-Type": "text/plain" });
-      return res.end("log fetch failed");
+    const start = q.get("start") || "", stop = q.get("stop") || "";
+    if (!TSTAMP.test(start) || !TSTAMP.test(stop)) {
+      res.writeHead(400, { "Content-Type": "text/plain" });
+      return res.end("bad start/stop");
     }
-    res.writeHead(200, { "Content-Type": "text/csv" });
-    return res.end(csv);
+    res.writeHead(200, { "Content-Type": "text/csv", "X-Log-Progress": Math.round(logProgress * 100) });
+    return res.end(logSlice(new Date(start).getTime(), new Date(stop).getTime()));
   }
   if (url === "/api") return json((await read()) || { error: "modbus read failed" });
   if (url === "/api/web") return json((await readWeb()) || { error: "getvar.csv fetch failed" });
@@ -212,6 +273,7 @@ if (require.main === module) {
     slackReport();
     setInterval(slackReport, SLACK_EVERY_MIN * 60 * 1000);
   }
+  logLoop(); // datalogger cache: 7 d backfill, then tail polling
 }
 
-module.exports = { scale, read, readWeb, readLog, TSTAMP, LABELS, WEB_VARS, ROW, PAGE, slackPayload };
+module.exports = { scale, read, readWeb, readLog, TSTAMP, LABELS, WEB_VARS, ROW, PAGE, slackPayload, logInsert, logSlice };

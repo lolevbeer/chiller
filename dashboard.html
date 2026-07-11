@@ -55,6 +55,7 @@ h2 { font-size: 13px; font-weight: 600; color: var(--ink); display: flex; align-
 #ranges button { background: none; border: 1px solid var(--line); color: var(--mut);
   font: 500 12px "Inter", sans-serif; padding: 3px 10px; border-radius: 5px; cursor: pointer; }
 #ranges button.on { color: var(--ink); border-color: var(--dim); }
+#histpct { margin-left: 10px; font-size: 12px; font-weight: 400; color: var(--dim); }
 #chart { margin-top: 4px; min-height: 220px; }
 #chart .msg { color: var(--dim); font-size: 13px; padding: 90px 0; text-align: center; }
 .u-legend { font: 400 12px "Inter", sans-serif !important; color: var(--mut) !important; }
@@ -124,7 +125,7 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
 </section>
 
 <section id="hist">
-  <h2>Glycol history<span id="ranges">
+  <h2>Glycol history<span id="histpct"></span><span id="ranges">
     <button data-h="6" class="on">6 h</button>
     <button data-h="24">24 h</button>
     <button data-h="168">7 d</button>
@@ -203,15 +204,22 @@ const pad = n => String(n).padStart(2, "0");
 const tstr = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T` +
                   `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 
+let histProgress = 100; // server backfill % (X-Log-Progress header); <100 shows the indicator
+
 async function loadHist(hours) {
   // -> uPlot data [[unix ts], [in °F], [out °F]], or null on failure.
-  // stop is padded +1 h: the controller clock drifts fast (~25 min ahead as of
-  // 2026-07-11), and rows stamped past "now" would otherwise be silently dropped.
+  // /api/log answers instantly from the server's rolling cache; X-Log-Progress
+  // says how much of the 7 d backfill has landed. stop is padded +1 h: the
+  // controller clock drifts fast (~25 min ahead as of 2026-07-11), and rows
+  // stamped past "now" would otherwise be silently dropped.
   const now = Date.now();
   const stop = new Date(now + 3600e3), start = new Date(now - hours * 3600e3);
   let text;
-  try { text = await (await fetch(`/api/log?start=${tstr(start)}&stop=${tstr(stop)}`)).text(); }
-  catch { return null; }
+  try {
+    const res = await fetch(`/api/log?start=${tstr(start)}&stop=${tstr(stop)}`);
+    histProgress = +(res.headers.get("X-Log-Progress") ?? 100);
+    text = await res.text();
+  } catch { return null; }
   const rows = text.trim().split(/\r?\n/); // controller CSV is CRLF
   const head = (rows.shift() || "").split(",").map(s => s.replace(/"/g, ""));
   const iT = head.indexOf("TIME"), iIn = head.indexOf("W_InTempUser"), iOut = head.indexOf("W_OutTempUser");
@@ -238,9 +246,11 @@ let histSetp = null;
 let histChart, histHours = 6;
 function drawHist(data) {
   const el = $("chart");
+  $("histpct").textContent = histProgress < 100 ? `backfilling ${histProgress}%` : "";
   if (histChart) { histChart.destroy(); histChart = null; }
   if (!data || !data[0].length) {
-    el.innerHTML = '<div class="msg">no log data for this range</div>';
+    el.innerHTML = `<div class="msg">${histProgress < 100
+      ? "loading history… " + histProgress + "%" : "no log data for this range"}</div>`;
     return;
   }
   el.innerHTML = "";
@@ -277,8 +287,11 @@ $("ranges").onclick = async e => {
 };
 addEventListener("resize", () => histChart && histChart.setSize({ width: $("chart").clientWidth, height: 220 }));
 histLoading();
-loadHist(histHours).then(drawHist);
-setInterval(async () => drawHist(await loadHist(histHours)), 60000);
+(async function histLoop() {
+  // fast ticks while the server backfills (indicator + chart grow), then 60 s
+  drawHist(await loadHist(histHours));
+  setTimeout(histLoop, histProgress < 100 ? 5000 : 60000);
+})();
 </script>
 </body>
 </html>

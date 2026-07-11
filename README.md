@@ -35,7 +35,7 @@ npm start          # CHILLER_IP=... PORT=... node chiller_dashboard.js
 | `/api`     | JSON `{addr: raw_uint16}` of INPUT registers 0..159                     |
 | `/api/web` | JSON `{label: value}` of the 12 web-only points (engineering units)     |
 | `/api/all` | `{"regs": ..., "web": ...}` combined payload the page's refresh loop uses |
-| `/api/log` | CSV pass-through of the controller's onboard datalogger (`?start=&stop=` in `YYYY-MM-DDThh:mm:ss`); feeds the history chart |
+| `/api/log` | CSV slice of the onboard datalogger (`?start=&stop=` in `YYYY-MM-DDThh:mm:ss`), served instantly from an in-process cache — the controller needs ~60 s per `getlog.csv` query (measured), so a background loop backfills 7 d newest-day-first (~15 min) then polls only the tail every `LOG_POLL_MIN` min (default 5). `X-Log-Progress` header = backfill %, which the page shows as a loading indicator |
 | `/uplot.js` `/uplot.css` | [uPlot](https://github.com/leeoniya/uPlot) assets, vendored from `node_modules` (no CDN) |
 
 `CHILLER_IP` overrides the target (default 192.168.1.69); `CHILLER_REGS` the read span
