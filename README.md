@@ -370,10 +370,13 @@ Cloudflare Access in front of it would remove the VPN requirement entirely for r
 
 ## Files
 
-- `chiller_dashboard.js` — the dashboard: Modbus reads (`read`, `scale`, `LABELS`),
-  web-var reads (`WEB_VARS`, `readWeb`), datalogger cache with disk
-  persistence (`readLog`, `logInsert`, `log_cache.csv`), `node:http` routes.
-  No framework.
+- `chiller_dashboard.js` — entry point: wires the `lib/` modules to `node:http`
+  and re-exports the test surface. No framework.
+- `lib/` — the server, one module per concern: `modbus.js` (`read`, `scale`,
+  `LABELS`), `webvars.js` (`WEB_VARS`, `readWeb`), `logcache.js` (datalogger
+  cache with disk persistence — `readLog`, `logInsert`, `log_cache.csv`),
+  `slack.js` (reporter), `routes.js` (request handler + static assets),
+  `config.js` (`.env` + shared `HOST`).
 - `dashboard.html` — the page (HTML/CSS/client JS), including the uPlot history
   chart and the three.js unit model (glossy-white PBR, fans spun by the render
   loop at live speed, drag-to-rotate via pointer events);
