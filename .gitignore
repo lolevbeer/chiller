@@ -4,3 +4,4 @@ __pycache__/
 node_modules/
 diag.txt
 widemap.json
+log_cache.csv

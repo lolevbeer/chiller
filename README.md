@@ -35,11 +35,11 @@ npm start          # CHILLER_IP=... PORT=... node chiller_dashboard.js
 
 | Route      | Serves                                                                  |
 |------------|-------------------------------------------------------------------------|
-| `/`        | Minimal Linear-inspired page: glycol in→out hero, per-circuit columns with fan/EEV meters, pump/flow status dots, glycol history chart (6 h/24 h/7 d, dashed line = current setpoint — the log has no setpoint column, so no history for it), raw-register table under a disclosure; re-renders in place every 5 s |
+| `/`        | Minimal Linear-inspired page: glycol in→out hero (out tinted amber above 30 °F, red above 40 °F — the same bands `slackPayload` uses) with setpoint/ΔT/reservoir/supply-pressure/cooling-demand facts, per-circuit columns grouped high side (discharge, condensing, fan) / low side (suction, evaporating, superheat, EEV) with compressor run/idle state, pump/flow status dots, runtime counters, glycol history chart (6 h/24 h/7 d, °F axis, dashed line = current setpoint — the log has no setpoint column, so no history for it; green strips along the bottom mark when each circuit's compressors were running, A above B), a slowly rotating pure-CSS 3D model of the unit styled after the real G&D cabinet — white panels, black trim and base rail, twin louvered doors with logo badges, control box on the right end (proportions from the install drawing, no 3D library); four condenser fans (two per circuit) spin at their live reported speeds in the two condenser zones stacked on the left 2/3 of the back panel (A above B, reservoir panel on the right third, per the rear-view drawing), and the two compressors glimpsed through the front louvers brighten while running, raw-register table under a disclosure; re-renders in place every 5 s. On wide screens (≥1100px) it becomes a full-width grid — glycol panel beside the circuit columns, chart spanning both. A failed refresh dims the data and stamps the header "offline · data N min old" |
 | `/api`     | JSON `{addr: raw_uint16}` of INPUT registers 0..159                     |
 | `/api/web` | JSON `{label: value}` of the 12 web-only points (engineering units)     |
 | `/api/all` | `{"regs": ..., "web": ...}` combined payload the page's refresh loop uses |
-| `/api/log` | CSV slice of the onboard datalogger (`?start=&stop=` in `YYYY-MM-DDThh:mm:ss`), served instantly from an in-process cache — the controller needs ~60 s per `getlog.csv` query (measured), so a background loop backfills 7 d newest-day-first (~15 min) then polls only the tail every `LOG_POLL_MIN` min (default 5). `X-Log-Progress` header = backfill %, which the page shows as a loading indicator |
+| `/api/log` | CSV slice of the onboard datalogger (`?start=&stop=` in `YYYY-MM-DDThh:mm:ss`), served instantly from an in-process cache that also persists to `log_cache.csv` (gitignored; `LOG_FILE` overrides the path) — a restart reloads 7 d instantly and backfills only the gap since the last saved row, instead of re-downloading everything (~15 min). The controller needs ~60 s per `getlog.csv` query (measured), so the backfill fetches 6 h chunks newest-first (each buffered whole, then merged), then polls only the tail every `LOG_POLL_MIN` min (default 5). `X-Log-Loading: 1` header while the backfill runs, which the page shows as an indefinite "backfilling…" indicator |
 | `/uplot.js` `/uplot.css` | [uPlot](https://github.com/leeoniya/uPlot) assets, vendored from `node_modules` (no CDN) |
 
 `CHILLER_IP` overrides the target (default 192.168.1.69); `CHILLER_REGS` the read span
@@ -258,10 +258,12 @@ Cloudflare Access in front of it would remove the VPN requirement entirely for r
 ## Files
 
 - `chiller_dashboard.js` — the dashboard: Modbus reads (`read`, `scale`, `LABELS`),
-  web-var reads (`WEB_VARS`, `readWeb`), datalogger proxy (`readLog`), `node:http`
-  routes. No framework.
+  web-var reads (`WEB_VARS`, `readWeb`), datalogger cache with disk
+  persistence (`readLog`, `logInsert`, `log_cache.csv`), `node:http` routes.
+  No framework.
 - `dashboard.html` — the page (HTML/CSS/client JS), including the uPlot history
-  chart; served verbatim at `/`.
+  chart and the CSS-3D unit model (fan spin driven by a small rAF loop);
+  served verbatim at `/`.
 - `package.json` — declares the two dependencies (`modbus-serial`, `uplot`) and
   `start`/`test`.
 - `test.js` — offline self-check (scale/sign, CSV row parse, page wiring). `npm test`.

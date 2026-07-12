@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Lolev Chiller Monitor</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>❄️</text></svg>">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <link href="/uplot.css" rel="stylesheet">
@@ -21,27 +22,44 @@ body {
   font-variant-numeric: tabular-nums;
   max-width: 760px; margin: 0 auto; padding: 40px 24px 60px;
 }
-section { padding: 20px 0; border-bottom: 1px solid var(--line); }
-header { display: flex; align-items: center; gap: 10px; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+/* wide screens: full-width dashboard grid — glycol panel beside the circuits,
+   chart spans everything. ponytail: 1800px ceiling so ultrawides don't stretch rows */
+@media (min-width: 1100px) {
+  body { display: grid; grid-template-columns: 2fr 3fr; column-gap: 64px;
+         max-width: 1800px; padding: 40px 48px 60px; }
+  header, section, details, footer { grid-column: 1 / -1; }
+  .hero-wrap { grid-column: 1; }
+  .cols { grid-column: 2; }
+}
+section { padding: 20px 0; transition: opacity .3s; }
+/* stale data reads as stale: everything below the header dims while offline */
+body.offline section, body.offline details { opacity: .45; }
+header { display: flex; align-items: center; gap: 10px; padding-bottom: 20px; }
 header .logo { height: 22px; width: auto; flex: none; color: var(--ink); }
 h1 { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
 .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
 #stat { color: var(--mut); font-size: 13px; display: flex; align-items: center; gap: 7px; margin-left: 4px; }
+#stat.warn { color: var(--warn); } #stat.bad { color: var(--bad); }
 #net { margin-left: auto; color: var(--dim); font-size: 12px; }
 #net.down { color: var(--bad); }
+.cap { font-size: 11px; font-weight: 500; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 6px; }
 .hero { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .hero .t { font-size: 30px; font-weight: 500; letter-spacing: -.02em; }
 .hero .t.out { color: var(--accent); }
+.hero .t.out.warn { color: var(--warn); }
+.hero .t.out.bad { color: var(--bad); }
 .hero .u { color: var(--dim); font-size: 14px; }
 .hero .to { color: var(--dim); font-size: 18px; padding: 0 4px; }
 .facts { display: flex; gap: 28px; flex-wrap: wrap; margin-top: 14px; }
 .facts div { font-size: 13px; color: var(--mut); }
 .facts b { display: block; font-size: 14px; font-weight: 500; color: var(--ink); margin-top: 1px; }
 .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 40px; }
-@media (max-width: 560px) { .cols { grid-template-columns: 1fr; } }
+@media (max-width: 560px) { .cols { grid-template-columns: 1fr; gap: 24px 40px; } }
 h2 { font-size: 13px; font-weight: 600; color: var(--ink); display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
+h2 .cst { color: var(--dim); font-weight: 400; }
 .row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
+.side { font-size: 11px; font-weight: 500; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; margin: 10px 0 2px; }
 .row .k { color: var(--mut); }
 .row .v { color: var(--ink); font-weight: 500; }
 .row .v i { color: var(--dim); font-style: normal; font-weight: 400; }
@@ -51,18 +69,87 @@ h2 { font-size: 13px; font-weight: 600; color: var(--ink); display: flex; align-
 .pills span { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--mut); }
 .hours { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 12px; font-size: 12px; color: var(--dim); }
 .hours b { color: var(--mut); font-weight: 500; }
-#ranges { display: flex; gap: 6px; margin-left: auto; }
-#ranges button { background: none; border: 1px solid var(--line); color: var(--mut);
-  font: 500 12px "Inter", sans-serif; padding: 3px 10px; border-radius: 5px; cursor: pointer; }
-#ranges button.on { color: var(--ink); border-color: var(--dim); }
+/* segmented control: one bordered group, filled active segment (outer radius = inner + padding) */
+#ranges { display: flex; gap: 2px; margin-left: auto; padding: 2px; border-radius: 8px; }
+#ranges button { background: none; border: 0; color: var(--mut);
+  font: 500 12px "Inter", sans-serif; padding: 5px 12px; border-radius: 6px; cursor: pointer;
+  transition-property: background-color, color; transition-duration: 150ms; }
+#ranges button:hover { color: var(--ink); }
+#ranges button.on { color: var(--ink); background: var(--line); }
 #histpct { margin-left: 10px; font-size: 12px; font-weight: 400; color: var(--dim); }
+#histpct:not(:empty) { animation: histpulse 1.6s ease-in-out infinite; } /* indefinite: pulse while backfilling */
+@keyframes histpulse { 50% { opacity: .35; } }
 #chart { margin-top: 4px; min-height: 220px; }
 #chart .msg { color: var(--dim); font-size: 13px; padding: 90px 0; text-align: center; }
 .u-legend { font: 400 12px "Inter", sans-serif !important; color: var(--mut) !important; }
+/* --- 3D unit: pure CSS box (no library), proportions from the install drawing
+   93.9 W × 48.2 D × 66.4 H in ≈ 240 × 123 × 170 px. Styled after the real
+   G&D cabinet: white panels, black edge trim + base rail, two louvered front
+   doors (round logo badge each, compressors peeking through the slat gaps),
+   control box on the right end, glycol ports on the left, condenser fan zones
+   stacked on the BACK panel — zone A above zone B, aux port lower right, per
+   the rear-view drawing — fans spun by JS at live speed. Slow turntable spin
+   shows every face. --- */
+.scene { height: 230px; display: flex; align-items: center; justify-content: center; perspective: 1100px; }
+.unit { position: relative; width: 240px; height: 170px; transform-style: preserve-3d;
+        animation: unitspin 36s linear infinite; }
+/* -26° tilt: a bit of the top face stays in view through the spin */
+@keyframes unitspin { from { transform: rotateX(-26deg) rotateY(0deg); }
+                      to   { transform: rotateX(-26deg) rotateY(360deg); } }
+@media (prefers-reduced-motion: reduce) { .unit { animation: none; transform: rotateX(-26deg) rotateY(-32deg); } }
+.face { position: absolute; width: 240px; height: 170px; border: 2px solid #141518; backface-visibility: hidden; }
+.f-front { transform: translateZ(61.5px); background: #101318; } /* dark interior behind the louver gaps */
+.f-front::after { content: ""; position: absolute; inset: 0; background:
+  /* round logo badge on each door */
+  radial-gradient(circle at 25% 12px, #17181b 7px, transparent 8px),
+  radial-gradient(circle at 75% 12px, #17181b 7px, transparent 8px),
+  /* forklift slots in the base rail */
+  linear-gradient(#33363b, #33363b) 30% calc(100% - 3px) / 36px 6px no-repeat,
+  linear-gradient(#33363b, #33363b) 70% calc(100% - 3px) / 36px 6px no-repeat,
+  /* black base rail */
+  linear-gradient(0deg, #141518 0 12px, transparent 12px),
+  /* black post between the two doors */
+  linear-gradient(90deg, transparent 0 calc(50% - 5px), #141518 calc(50% - 5px) calc(50% + 5px), transparent 0),
+  /* white door frame: side margins + top band */
+  linear-gradient(90deg, #eceded 0 6px, transparent 6px calc(100% - 6px), #eceded calc(100% - 6px)),
+  linear-gradient(#eceded 0 24px, transparent 24px),
+  /* louvers: white slats, shadow line, see-through gap so the compressors peek out */
+  repeating-linear-gradient(180deg, #eceded 0 7px, #c3c6c2 7px 8px, rgba(10,12,15,.28) 8px 12px); }
+.comp { position: absolute; bottom: 14px; width: 36px; height: 78px; border-radius: 10px;
+        background: linear-gradient(90deg, #2a323e, #414f61 45%, #2a323e); } /* scroll compressors, steel blue per drawing */
+.comp.on { background: linear-gradient(90deg, #354862, #5f7ba1 45%, #354862); }
+#c3d1 { left: 17%; } #c3d2 { left: 69%; }
+.f-back { transform: rotateY(180deg) translateZ(61.5px); display: grid; /* condenser zones stacked on the left 2/3 per the rear-view drawing: A above B; right 1/3 is the reservoir panel, aux port at its lower right */
+  grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 8px 2px;
+  padding: 8px 80px 16px 12px; background:
+  radial-gradient(circle at 88% 82%, #4a4f58 5px, transparent 6px),
+  linear-gradient(0deg, #141518 0 12px, transparent 12px), #e4e6e3; }
+.f-side { width: 123px; left: 58.5px; background: #e2e4e1; } /* left = (240-123)/2 */
+.f-left { transform: rotateY(-90deg) translateZ(120px); background: /* glycol supply/return stubs + base rail */
+  radial-gradient(circle at 38% 58%, #6b7280 5px, #2a2d34 5px 7px, transparent 7px),
+  radial-gradient(circle at 38% 72%, #6b7280 5px, #2a2d34 5px 7px, transparent 7px),
+  linear-gradient(0deg, #141518 0 12px, transparent 12px), #e2e4e1; }
+.f-right { transform: rotateY(90deg) translateZ(120px); background: /* control box near the front edge, logo badge low-rear, base rail */
+  linear-gradient(#f7f8f5, #eaece9) 16% 20% / 42% 52% no-repeat,
+  linear-gradient(#b9bcb8, #b9bcb8) 16% 20% / 44% 56% no-repeat,
+  radial-gradient(circle at 72% 74%, #17181b 5px, transparent 6px),
+  linear-gradient(0deg, #141518 0 12px, transparent 12px), #e2e4e1; }
+.f-flat { height: 123px; top: 23.5px; } /* top = (170-123)/2 */
+.f-top { transform: rotateX(90deg) translateZ(85px); background: linear-gradient(#f0f1ee, #e8eae7); }
+.f-bot { transform: rotateX(-90deg) translateZ(85px); background: #101216; }
+.grille { position: relative; flex: 1; background: #0d0f13; border: 1px solid #3a3e47; overflow: hidden; }
+.grille::after { content: ""; position: absolute; inset: 0; background: /* wire mesh over the fan */
+  repeating-linear-gradient(0deg, rgba(8,9,12,.6) 0 1px, transparent 1px 7px),
+  repeating-linear-gradient(90deg, rgba(8,9,12,.6) 0 1px, transparent 1px 7px); }
+.grille b { position: absolute; right: 6px; bottom: 2px; z-index: 1; font-size: 10px; font-weight: 500; color: var(--dim); }
+.fan { position: absolute; inset: 0; margin: auto; height: 88%; aspect-ratio: 1; /* square, centered in the non-square grille */
+  border-radius: 50%; will-change: transform; background:
+  radial-gradient(circle, #666c76 0 11%, #23262d 11% 16%, transparent 16%),
+  repeating-conic-gradient(from 0deg, #8891a0 0 24deg, transparent 24deg 72deg); } /* 5 pie-slice blades */
 details { padding-top: 18px; color: var(--dim); font-size: 13px; }
 summary { cursor: pointer; }
 details table { border-collapse: collapse; margin-top: 10px; font-size: 12px; }
-details td, details th { border: 1px solid var(--line); padding: 3px 10px; text-align: left; color: var(--mut); }
+details td, details th { padding: 3px 10px; text-align: left; color: var(--mut); }
 footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
 </style>
 </head>
@@ -81,41 +168,47 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
 </header>
 
 <section class="hero-wrap">
+  <div class="cap">Glycol loop</div>
   <div class="hero">
-    <span class="t" id="glyIn">–</span><span class="u">°F in</span>
+    <span class="t" id="glyIn" title="Warm glycol returning from the process">–</span><span class="u">°F in</span>
     <span class="to">→</span>
-    <span class="t out" id="glyOut">–</span><span class="u">°F out</span>
+    <span class="t out" id="glyOut" title="Chilled glycol supply — amber above 30 °F, red above 40 °F (same thresholds as the Slack reports)">–</span><span class="u">°F out</span>
   </div>
   <div class="facts">
-    <div>Setpoint<b id="setp">–</b></div>
-    <div>Reservoir<b id="resT">–</b></div>
+    <div title="Target supply temperature (CoolSetP)">Setpoint<b id="setp">–</b></div>
+    <div title="Return minus supply — how much heat the chiller is removing right now">ΔT<b id="dt">–</b></div>
+    <div>Reservoir temp<b id="resT">–</b></div>
     <div>Supply pressure<b id="supP">–</b></div>
-    <div>Power request<b id="pwr">–</b></div>
+    <div title="Power request — % of capacity the controller is calling for">Cooling demand<b id="pwr">–</b></div>
   </div>
 </section>
 
 <section class="cols">
   <div>
-    <h2><span class="dot" id="comp1"></span>Circuit A</h2>
+    <h2><span class="dot" id="comp1"></span>Circuit A <span class="cst" id="cst1"></span></h2>
+    <div class="side" title="Hot compressed refrigerant rejecting heat outdoors">High side</div>
     <div class="row"><span class="k">Discharge pressure</span><span class="v"><span id="dscgP1">–</span> <i>psi</i></span></div>
-    <div class="row"><span class="k">Suction pressure</span><span class="v"><span id="suctP1">–</span> <i>psi</i></span></div>
     <div class="row"><span class="k">Condensing temp</span><span class="v"><span id="condT1">–</span> <i>°F</i></span></div>
+    <div class="row"><span class="k">Condenser fan</span><span class="v"><span class="bar"><i id="fanB1"></i></span><span id="fan1">–</span></span></div>
+    <div class="side" title="Cold refrigerant absorbing heat from the glycol">Low side</div>
+    <div class="row"><span class="k">Suction pressure</span><span class="v"><span id="suctP1">–</span> <i>psi</i></span></div>
     <div class="row"><span class="k">Evaporating temp</span><span class="v"><span id="evapT1">–</span> <i>°F</i></span></div>
     <div class="row"><span class="k">Suction temp</span><span class="v"><span id="suctT1">–</span> <i>°F</i></span></div>
-    <div class="row"><span class="k">Suction superheat</span><span class="v" id="ssh1">–</span></div>
-    <div class="row"><span class="k">Fan</span><span class="v"><span class="bar"><i id="fanB1"></i></span><span id="fan1">–</span></span></div>
-    <div class="row"><span class="k">EEV</span><span class="v"><span class="bar"><i id="eevB1"></i></span><span id="eev1">–</span></span></div>
+    <div class="row"><span class="k">Suction superheat</span><span class="v"><span id="ssh1">–</span> <i>°F</i></span></div>
+    <div class="row"><span class="k">EEV opening</span><span class="v"><span class="bar"><i id="eevB1"></i></span><span id="eev1">–</span></span></div>
   </div>
   <div>
-    <h2><span class="dot" id="comp2"></span>Circuit B</h2>
+    <h2><span class="dot" id="comp2"></span>Circuit B <span class="cst" id="cst2"></span></h2>
+    <div class="side" title="Hot compressed refrigerant rejecting heat outdoors">High side</div>
     <div class="row"><span class="k">Discharge pressure</span><span class="v"><span id="dscgP2">–</span> <i>psi</i></span></div>
-    <div class="row"><span class="k">Suction pressure</span><span class="v"><span id="suctP2">–</span> <i>psi</i></span></div>
     <div class="row"><span class="k">Condensing temp</span><span class="v"><span id="condT2">–</span> <i>°F</i></span></div>
+    <div class="row"><span class="k">Condenser fan</span><span class="v"><span class="bar"><i id="fanB2"></i></span><span id="fan2">–</span></span></div>
+    <div class="side" title="Cold refrigerant absorbing heat from the glycol">Low side</div>
+    <div class="row"><span class="k">Suction pressure</span><span class="v"><span id="suctP2">–</span> <i>psi</i></span></div>
     <div class="row"><span class="k">Evaporating temp</span><span class="v"><span id="evapT2">–</span> <i>°F</i></span></div>
     <div class="row"><span class="k">Suction temp</span><span class="v"><span id="suctT2">–</span> <i>°F</i></span></div>
-    <div class="row"><span class="k">Suction superheat</span><span class="v" id="ssh2">–</span></div>
-    <div class="row"><span class="k">Fan</span><span class="v"><span class="bar"><i id="fanB2"></i></span><span id="fan2">–</span></span></div>
-    <div class="row"><span class="k">EEV</span><span class="v"><span class="bar"><i id="eevB2"></i></span><span id="eev2">–</span></span></div>
+    <div class="row"><span class="k">Suction superheat</span><span class="v"><span id="ssh2">–</span> <i>°F</i></span></div>
+    <div class="row"><span class="k">EEV opening</span><span class="v"><span class="bar"><i id="eevB2"></i></span><span id="eev2">–</span></span></div>
   </div>
 </section>
 
@@ -133,7 +226,28 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
   <div id="chart"></div>
 </section>
 
-<details><summary>Raw registers</summary><table id="raw"></table></details>
+<section>
+  <div class="cap" title="Proportions from the install drawing (93.9 × 48.2 × 66.4). Fans spin at their live reported speed.">Unit · fans at live speed</div>
+  <div class="scene">
+    <div class="unit">
+      <div class="face f-front">
+        <div class="comp" id="c3d1"></div><div class="comp" id="c3d2"></div>
+      </div>
+      <div class="face f-back">
+        <div class="grille"><div class="fan"></div></div>
+        <div class="grille"><div class="fan"></div><b>A</b></div>
+        <div class="grille"><div class="fan"></div></div>
+        <div class="grille"><div class="fan"></div><b>B</b></div>
+      </div>
+      <div class="face f-side f-left"></div>
+      <div class="face f-side f-right"></div>
+      <div class="face f-flat f-top"></div>
+      <div class="face f-flat f-bot"></div>
+    </div>
+  </div>
+</section>
+
+<details><summary>Raw registers (debug)</summary><table id="raw"></table></details>
 <footer>Read-only · Modbus TCP + getvar.csv + onboard datalogger · refreshes every 5 s</footer>
 
 <script>
@@ -154,10 +268,15 @@ async function tick() {
 
   const st = d.regs[0];
   set("stattxt", STATUS[st] || "Status " + st);
-  $("statdot").className = "dot " + (st === 9 ? "ok" : st === 2 ? "bad" : "warn");
+  const grade = st === 9 ? "ok" : st === 2 ? "bad" : "warn";
+  $("statdot").className = "dot " + grade;
+  $("stat").className = grade === "ok" ? "" : grade; // text echoes the dot so alarms read at a glance
 
   set("glyIn", r(69).toFixed(1)); set("glyOut", r(68).toFixed(1));
+  // health tint on the supply temp — same bands the Slack reports use (see slackPayload)
+  $("glyOut").className = "t out" + (r(68) > 40 ? " bad" : r(68) > 30 ? " warn" : "");
   set("setp", r(70).toFixed(1) + " °F"); set("resT", r(132).toFixed(1) + " °F");
+  set("dt", (r(69) - r(68)).toFixed(1) + " °F");
   histSetp = r(70); // feeds the history chart's setpoint reference line
   set("supP", (w["Glycol supply pres psi"] ?? NaN).toFixed(1) + " psi");
   set("pwr", (d.regs[1] / 10).toFixed(0) + "%");
@@ -167,19 +286,25 @@ async function tick() {
     set("dscgP" + n, r(base + 3).toFixed(1)); set("suctP" + n, r(base + 10).toFixed(1));
     set("condT" + n, r(base + 4).toFixed(1)); set("evapT" + n, r(base + 11).toFixed(1));
     set("suctT" + n, r(base + 9).toFixed(1)); set("ssh" + n, sh(r(base + 23)));
-    $("comp" + n).className = "dot" + (w["Compressor " + sfx + " on"] ? " ok" : "");
+    const comp = w["Compressor " + sfx + " on"];
+    $("comp" + n).className = "dot" + (comp ? " ok" : "");
+    $("c3d" + n).classList.toggle("on", !!comp); // 3D unit: compressor brightens while running
+    set("cst" + n, comp ? "· comp running" : "· comp idle");
     const fan = w["Fan speed " + sfx + " %"] ?? 0, eev = w["EEV position " + sfx + " %"] ?? 0;
     set("fan" + n, fan.toFixed(0) + "%"); $("fanB" + n).style.width = fan + "%";
+    fanSpd[+n - 1] = fan; // drives the 3D unit's fan animation
     set("eev" + n, eev.toFixed(0) + "%"); $("eevB" + n).style.width = eev + "%";
   }
 
-  const pill = (name, on, badWhenOff) =>
-    `<span><span class="dot ${on ? "ok" : badWhenOff ? "bad" : ""}"></span>${name}</span>`;
+  const pill = (name, on, badWhenOff, tip) =>
+    `<span title="${tip}"><span class="dot ${on ? "ok" : badWhenOff ? "bad" : ""}"></span>${name}</span>`;
   $("pills").innerHTML =
-    pill("Chiller pump", w["Chiller pump on"]) + pill("Process pump", w["Process pump on"]) +
-    pill("Flow A", w["Glycol flow A ok"], true) + pill("Flow B", w["Glycol flow B ok"], true);
+    pill("Chiller pump", w["Chiller pump on"], false, "Circulates glycol through the chiller") +
+    pill("Process pump", w["Process pump on"], false, "Circulates glycol out to the process") +
+    pill("Flow A", w["Glycol flow A ok"], true, "Flow switch, circuit A — red means no flow") +
+    pill("Flow B", w["Glycol flow B ok"], true, "Flow switch, circuit B — red means no flow");
 
-  $("hours").innerHTML =
+  $("hours").innerHTML = `<span>Runtime</span>` +
     `<span>Comp A <b>${d.regs[135]} h</b></span><span>Comp B <b>${d.regs[141]} h</b></span>` +
     `<span>Fan A <b>${d.regs[158]} h</b></span><span>Pump 2 <b>${d.regs[131]} h</b></span>`;
 
@@ -188,11 +313,35 @@ async function tick() {
     Object.entries(d.regs).filter(([, v]) => v !== 0)
       .map(([k, v]) => `<tr><td>${k}</td><td>${v}</td><td>${S(v)}</td></tr>`).join("");
 }
+let lastGoodMs = 0; // last successful refresh, so "offline" can say how stale the data is
+const age = ms => { const s = Math.round(ms / 1000);
+  return s < 90 ? s + " s" : s < 5400 ? Math.round(s / 60) + " min" : Math.round(s / 3600) + " h"; };
 function net(ok) {
   const el = $("net");
-  el.textContent = ok ? new Date().toLocaleTimeString() : "offline";
+  if (ok) lastGoodMs = Date.now();
+  el.textContent = ok ? "updated " + new Date().toLocaleTimeString()
+                      : "offline" + (lastGoodMs ? " · data " + age(Date.now() - lastGoodMs) + " old" : "");
   el.className = ok ? "" : "down";
+  document.body.classList.toggle("offline", !ok);
 }
+// --- 3D unit fans: rAF integrates angle so speed changes don't snap the blades
+// (changing a CSS animation-duration mid-flight would). fanSpd is written by tick().
+// 4 fans, 2 per circuit — back-panel zones, row-major: top zone = A, bottom = B
+// (rear-view drawing); staggered start angles so pairs don't spin in fake lockstep.
+// ponytail: 100% = 1.2 rev/s is display calibration, not physics — tune to taste.
+const fanSpd = [0, 0], fan3d = [...document.querySelectorAll(".fan")];
+const fanCirc = [0, 0, 1, 1], fanAng = [0, 90, 45, 135];
+const noMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let fanPrev = performance.now();
+(function spinFans(t) {
+  const dt = Math.min((t - fanPrev) / 1000, .1); fanPrev = t; // clamp: throttled background tabs
+  fan3d.forEach((el, i) => {
+    fanAng[i] = (fanAng[i] + 432 * (fanSpd[fanCirc[i]] / 100) * dt) % 360; // 432°/s = 1.2 rev/s at 100%
+    el.style.transform = `rotate(${fanAng[i]}deg)`;
+  });
+  if (!noMotion) requestAnimationFrame(spinFans);
+})(fanPrev);
+
 tick(); setInterval(tick, 5000);
 
 // --- Glycol history: the controller's onboard datalogger via /api/log ---
@@ -204,12 +353,14 @@ const pad = n => String(n).padStart(2, "0");
 const tstr = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T` +
                   `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 
-let histProgress = 100; // server backfill % (X-Log-Progress header); <100 shows the indicator
+let histBackfilling = false; // true while the server backfill runs (X-Log-Loading header)
 
 async function loadHist(hours) {
-  // -> uPlot data [[unix ts], [in °F], [out °F]], or null on failure.
-  // /api/log answers instantly from the server's rolling cache; X-Log-Progress
-  // says how much of the 7 d backfill has landed. stop is padded +1 h: the
+  // -> uPlot data [[unix ts], [in °F], [out °F], [circ A run], [circ B run]],
+  // or null on failure. Run series are strip y-values (fixed "run" scale) while
+  // either of the circuit's compressors is on, null while off.
+  // /api/log answers instantly from the server's rolling cache; X-Log-Loading
+  // says its startup backfill is still running. stop is padded +1 h: the
   // controller clock drifts fast (~25 min ahead as of 2026-07-11), and rows
   // stamped past "now" would otherwise be silently dropped.
   const now = Date.now();
@@ -217,25 +368,30 @@ async function loadHist(hours) {
   let text;
   try {
     const res = await fetch(`/api/log?start=${tstr(start)}&stop=${tstr(stop)}`);
-    histProgress = +(res.headers.get("X-Log-Progress") ?? 100);
+    histBackfilling = res.headers.get("X-Log-Loading") === "1";
     text = await res.text();
   } catch { return null; }
   const rows = text.trim().split(/\r?\n/); // controller CSV is CRLF
   const head = (rows.shift() || "").split(",").map(s => s.replace(/"/g, ""));
   const iT = head.indexOf("TIME"), iIn = head.indexOf("W_InTempUser"), iOut = head.indexOf("W_OutTempUser");
+  // each circuit has two compressor state columns; "running" = either is 1
+  const iA1 = head.indexOf("Comp1Circ1_Dout.Val"), iA2 = head.indexOf("Comp2Circ1_On");
+  const iB1 = head.indexOf("Comp1Circ2_Dout.Val"), iB2 = head.indexOf("Comp2Circ2_On");
   if (iT < 0 || iIn < 0 || iOut < 0) return null;
-  const xs = [], ins = [], outs = [];
+  const xs = [], ins = [], outs = [], as = [], bs = [];
   for (const line of rows) {
     const c = line.split(",");
     if (c.length < head.length) continue;
     const t = new Date(c[iT].slice(0, 19)).getTime() / 1000; // strip +00:00, parse as local
     if (!isFinite(t)) continue;
-    if (xs.length && t - xs[xs.length - 1] > 900) {          // >15 min hole: break the line
-      xs.push(t - 1); ins.push(null); outs.push(null);
+    if (xs.length && t - xs[xs.length - 1] > 900) {          // >15 min hole: break the lines
+      xs.push(t - 1); ins.push(null); outs.push(null); as.push(null); bs.push(null);
     }
     xs.push(t); ins.push(F(parseFloat(c[iIn]))); outs.push(F(parseFloat(c[iOut])));
+    as.push(+c[iA1] || +c[iA2] ? 1.5 : null);                // strip heights on the "run" scale
+    bs.push(+c[iB1] || +c[iB2] ? 0.5 : null);
   }
-  return [xs, ins, outs];
+  return [xs, ins, outs, as, bs];
 }
 
 // Current cooling setpoint (Modbus reg 70, °F), set by tick(). Drawn as a flat
@@ -246,11 +402,10 @@ let histSetp = null;
 let histChart, histHours = 6;
 function drawHist(data) {
   const el = $("chart");
-  $("histpct").textContent = histProgress < 100 ? `backfilling ${histProgress}%` : "";
+  $("histpct").textContent = histBackfilling ? "backfilling…" : "";
   if (histChart) { histChart.destroy(); histChart = null; }
   if (!data || !data[0].length) {
-    el.innerHTML = `<div class="msg">${histProgress < 100
-      ? "loading history… " + histProgress + "%" : "no log data for this range"}</div>`;
+    el.innerHTML = `<div class="msg">${histBackfilling ? "loading history…" : "no log data for this range"}</div>`;
     return;
   }
   el.innerHTML = "";
@@ -259,15 +414,22 @@ function drawHist(data) {
   const axis = { stroke: v("--dim"), grid: { stroke: v("--line"), width: 1 },
                  ticks: { stroke: v("--line"), width: 1 }, font: '12px "Inter", sans-serif' };
   const degF = (u, x) => (x == null ? "–" : x.toFixed(1) + " °F");
+  // compressor run strips: stepped bars at the chart bottom on a fixed hidden
+  // scale (A above B), drawn only while running so idle time stays empty
+  const strip = (label) => ({ label, stroke: v("--ok"), width: 4, scale: "run",
+    paths: uPlot.paths.stepped({ align: 1 }), points: { show: false },
+    value: (u, x) => (x == null ? "off" : "on") });
   histChart = new uPlot({
     width: el.clientWidth, height: 220,
     series: [
       {},
-      { label: "In",  stroke: v("--hist-in"), width: 2, value: degF },
-      { label: "Out", stroke: v("--accent"),  width: 2, value: degF },
+      { label: "In (return)",  stroke: v("--hist-in"), width: 2, value: degF },
+      { label: "Out (supply)", stroke: v("--accent"),  width: 2, value: degF },
+      strip("Comp A"), strip("Comp B"),
       { label: "Setpoint", stroke: v("--mut"), width: 1, dash: [4, 4], value: degF },
     ],
-    axes: [axis, { ...axis, size: 46 }],
+    scales: { run: { range: [0, 15] } }, // strips occupy the bottom ~10%
+    axes: [axis, { ...axis, size: 46, values: (u, vs) => vs.map(x => x + "°") }],
   }, [...data, data[0].map(() => histSetp)], el);
 }
 
@@ -288,9 +450,9 @@ $("ranges").onclick = async e => {
 addEventListener("resize", () => histChart && histChart.setSize({ width: $("chart").clientWidth, height: 220 }));
 histLoading();
 (async function histLoop() {
-  // fast ticks while the server backfills (indicator + chart grow), then 60 s
+  // fast ticks while the server backfills (chart grows chunk by chunk), then 60 s
   drawHist(await loadHist(histHours));
-  setTimeout(histLoop, histProgress < 100 ? 5000 : 60000);
+  setTimeout(histLoop, histBackfilling ? 5000 : 60000);
 })();
 </script>
 </body>

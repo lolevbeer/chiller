@@ -8,6 +8,12 @@ const fs = require("fs");
 const path = require("path");
 const ModbusRTU = require("modbus-serial");
 
+// modbus-serial can leak an async socket error (e.g. connect ETIMEDOUT when the
+// chiller is unreachable) outside the connectTCP promise, which would kill the
+// process as an unhandled rejection. This is a read-only dashboard: log and keep
+// serving — the page shows "offline" until reads succeed again.
+process.on("unhandledRejection", (e) => console.error("unhandled rejection:", e?.message ?? e));
+
 const HOST = process.env.CHILLER_IP || "192.168.1.69";
 const PORT = Number(process.env.PORT || 8000);
 const COUNT = Number(process.env.CHILLER_REGS || 160); // confirmed map spans 0..158
@@ -56,7 +62,11 @@ async function read() {
   const c = new ModbusRTU();
   c.setTimeout(3000);
   try {
-    await c.connectTCP(HOST, { port: 502 });
+    // connectTCP has no connect timeout of its own (setTimeout above only covers
+    // responses) — race it so an unreachable chiller answers null in 5 s, not the
+    // OS's ~75 s. A late loser rejection lands in the unhandledRejection log.
+    await Promise.race([c.connectTCP(HOST, { port: 502 }),
+      new Promise((_, rej) => setTimeout(rej, 5000, new Error("modbus connect timeout")).unref())]);
     c.setID(1);
     const out = {}; // addr -> raw uint16; chunked: Modbus allows max 125 regs/read
     for (let base = 0; base < COUNT; base += 100) {
@@ -117,32 +127,34 @@ async function readWeb() {
 const TSTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/; // controller date format, also our param whitelist
 
 async function readLog(start, stop) {
-  // One raw CSV query to the controller; null on bad params or failure. Only the
-  // cache loop below calls this — measured 2026-07-11, the embedded server needs
-  // ~60 s per query before size even matters (1 h = 64 s, 6 h = 95 s), hence the
-  // 5 min timeout and why /api/log never hits it live.
+  // One CSV query to the controller, buffered whole and merged with a single
+  // logInsert. Only the cache loop below calls this — measured 2026-07-11, the
+  // embedded server needs ~60 s per query before size even matters (1 h = 64 s,
+  // 6 h = 95 s), hence the 5 min timeout and why /api/log never hits it live.
+  // Returns rows added, or null on failure.
   if (!TSTAMP.test(start) || !TSTAMP.test(stop)) return null;
   try {
     const res = await fetch(`http://${HOST}/getlog.csv?id=0&start=${start}&stop=${stop}`,
       { signal: AbortSignal.timeout(300000) });
-    return res.ok ? await res.text() : null;
+    return res.ok ? logInsert(await res.text()) : null;
   } catch {
     return null;
   }
 }
 
 // --- Datalogger cache ---
-// logLoop() backfills the last LOG_DAYS newest-day-first (so the default 6 h
-// view fills after the first chunk), then polls only the tail — one controller
-// request in flight, ever. /api/log answers instantly from logCache and reports
-// backfill completion in an X-Log-Progress header (%, day-granularity) that the
-// page renders as its loading indicator.
+// logLoop() reloads the cache from disk, backfills only the missing window
+// newest-chunk-first (so the default 6 h view fills after the first chunk),
+// then polls only the tail — one controller request in flight, ever. /api/log
+// answers instantly from logCache; an X-Log-Loading header (1 while the
+// backfill runs) drives the page's indefinite loading indicator.
 const LOG_DAYS = 7; // matches the page's longest range
 const LOG_POLL_MIN = Number(process.env.LOG_POLL_MIN || 5);
 const DAY = 86400e3, PAD = 3600e3; // PAD: controller clock runs fast (~25 min as of 2026-07-11)
+const CHUNK = 6 * 3600e3; // largest query size measured reliable (6 h = 95 s; a full day risks the timeout)
 const logCache = []; // [tMs, csvLine] ascending; 7 d of 5 s samples ≈ 120k rows, ~30 MB
 let logHeader = "TIME"; // replaced by the real header on first chunk
-let logProgress = 0; // 0..1 backfill completion
+let logLoading = true; // true until the startup backfill completes
 
 const pad2 = (n) => String(n).padStart(2, "0");
 const tstr = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T` +
@@ -156,7 +168,7 @@ function logInsert(csv) {
   if (!csv) return 0;
   const rows = csv.trim().split(/\r?\n/);
   logHeader = rows.shift() || logHeader;
-  const seen = new Set(logCache.map((r) => r[0])); // ponytail: O(n) rebuild per chunk; chunks arrive every few minutes
+  const seen = new Set(logCache.map((r) => r[0])); // ponytail: O(n) rebuild per call; readLog throttles flushes to every 5 s
   let added = 0;
   for (const line of rows) {
     const t = new Date(line.slice(0, 19)).getTime();
@@ -173,19 +185,37 @@ function logInsert(csv) {
 const logSlice = (t0, t1) => // CSV text for a [ms, ms] window, header always included
   [logHeader, ...logCache.filter((r) => r[0] >= t0 && r[0] <= t1).map((r) => r[1])].join("\n");
 
+// The cache also persists to disk (LOG_FILE, gitignored) so a restart — every
+// deploy does one — reloads 7 d instantly and backfills only the days missing
+// since the last saved row, instead of re-downloading everything (~15 min).
+const LOG_FILE = process.env.LOG_FILE || path.join(__dirname, "log_cache.csv");
+const saveLog = () => // full rewrite, async; trailing \n so tail appends start on a fresh line
+  fs.promises.writeFile(LOG_FILE, logSlice(-Infinity, Infinity) + "\n").catch(() => {});
+
 async function logLoop() {
-  for (let done = 0; done < LOG_DAYS; ) { // backfill, newest day first
-    const stop = Date.now() + PAD - done * DAY;
-    const csv = await readLog(tstr(new Date(stop - DAY - PAD)), tstr(new Date(stop)));
-    if (csv === null) { await sleep(60e3); continue; } // controller busy/offline — retry this chunk
-    logInsert(csv);
-    logProgress = ++done / LOG_DAYS;
+  try { logInsert(fs.readFileSync(LOG_FILE, "utf8")); } catch {} // no/bad file = cold start
+  const newest = logCache.length ? logCache[logCache.length - 1][0] : 0;
+  // backfill everything between the last saved row (or the 7 d horizon) and
+  // now, newest chunk first so the default 6 h view fills after one query
+  const horizon = Math.max(newest, Date.now() - LOG_DAYS * DAY);
+  for (let stop = Date.now() + PAD; stop > horizon; ) {
+    const start = Math.max(horizon, stop - CHUNK);
+    const n = await readLog(tstr(new Date(start)), tstr(new Date(stop)));
+    if (n === null) { await sleep(60e3); continue; } // controller busy/offline — retry this chunk
+    stop = start;
     await sleep(5e3); // breathe between minute-long queries
   }
+  logLoading = false;
+  await saveLog();
+  let lastCompact = Date.now();
   while (true) { // tail poll: only rows newer than the cache
     await sleep(LOG_POLL_MIN * 60e3);
     const last = logCache.length ? logCache[logCache.length - 1][0] : Date.now() - DAY;
-    logInsert(await readLog(tstr(new Date(last)), tstr(new Date(Date.now() + PAD))));
+    await readLog(tstr(new Date(last)), tstr(new Date(Date.now() + PAD)));
+    const fresh = logCache.filter((r) => r[0] > last).map((r) => r[1]);
+    if (fresh.length) fs.promises.appendFile(LOG_FILE, fresh.join("\n") + "\n").catch(() => {});
+    // ponytail: append-only file grows ~4 MB/day — a daily rewrite re-trims it to the 7 d window
+    if (Date.now() - lastCompact > DAY) { await saveLog(); lastCompact = Date.now(); }
   }
 }
 
@@ -249,14 +279,14 @@ async function handle(req, res) {
   if (url === "/api/log") {
     // History chart data: instant slice of the in-process cache (see logLoop —
     // the controller is far too slow to query per request). ?start=&stop= in
-    // YYYY-MM-DDThh:mm:ss local; X-Log-Progress header = backfill %.
+    // YYYY-MM-DDThh:mm:ss local; X-Log-Loading: 1 while the backfill runs.
     const q = new URL(req.url, "http://x").searchParams;
     const start = q.get("start") || "", stop = q.get("stop") || "";
     if (!TSTAMP.test(start) || !TSTAMP.test(stop)) {
       res.writeHead(400, { "Content-Type": "text/plain" });
       return res.end("bad start/stop");
     }
-    res.writeHead(200, { "Content-Type": "text/csv", "X-Log-Progress": Math.round(logProgress * 100) });
+    res.writeHead(200, { "Content-Type": "text/csv", "X-Log-Loading": logLoading ? 1 : 0 });
     return res.end(logSlice(new Date(start).getTime(), new Date(stop).getTime()));
   }
   if (url === "/api") return json((await read()) || { error: "modbus read failed" });
