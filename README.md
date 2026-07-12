@@ -19,6 +19,116 @@ c.pCO controller @ 192.168.1.69
  └── HTTP :80         — Carel microwebsite; getvar.csv exposes ALL ~4000 PLC variables
 ```
 
+## The chiller and how it works
+
+**The machine.** A G&D Chillers air-cooled packaged glycol chiller at Lolev Beer —
+one white cabinet (93.9 W × 48.2 D × 66.4 H in per the install drawing) containing
+two independent refrigeration circuits (A and B), the glycol reservoir, both pumps,
+and the Carel c.pCO PLC that runs it all and exposes the data this dashboard reads.
+Cabinet layout per the install drawings and factory photos: twin louvered doors across
+the front with the compressors behind them (two per circuit — the datalogger carries two
+state columns per circuit, `Comp1Circ1…`/`Comp2Circ1…`), two full-width condenser coil
+faces stacked on the back with the fans inside behind them — the openings start at the
+control-box end, and the blank third at the other end carries the auxiliary port — the
+control box on the right end, and glycol supply/return connections on the left end.
+The page's 3D model approximates this; see below for its geometry and where it still
+deviates from the drawings.
+
+### The 3D unit model — geometry and spec comparison
+
+One hand-built three.js scene (module script at the bottom of `dashboard.html`;
+a TWEAK MAP comment at the top of that script documents the coordinate system,
+landmark coordinates, and every adjustable knob).
+1 model unit ≈ 0.391 in: the cabinet is 240 × 170 × 123 units = the drawing's
+93.9 W × 66.4 H × 48.2 D in. +z is the front, +x the control-box end.
+
+| Part | Geometry (model units) | Placement |
+|------|------------------------|-----------|
+| Shell | 240×170×123: glossy-white top/ends, dark bottom, black edge trim; back skin in five pieces leaving two real condenser openings | |
+| Base rail | 244×12×127 black box, slightly proud | bottom |
+| Doors | 2 × 10 louver slats (93×8×3, tilted .55 rad), black top band + corner posts (all four cabinet corners), 18-wide center post with recessed slots, flat side bezels | front, z +59.5 |
+| Badges | 3 G&D-seal medallions (r 7 × 3 cylinders, vendor SVG canvas-mapped onto the front cap) | top of each door + centered on the control-box end just below mid-height (120.5, −14, 0) |
+| Compressors | 2 cylinders (r 18 × 39), steel-blue, light up (emissive) while running | behind the louvers, stacked A above B at (60, 20/−44, 36) |
+| Control box | 6×53×42 box | right end, upper third, horizontally centered (122, 50, 0) |
+| Glycol stubs | 2 cylinders (r 7 × 14), supply above return (per the drawing) | left end, (−124, −14/−37, 15) |
+| Reading chips | 8 HTML chips holding every live reading, each pinned to a 3D anchor riding the unit (`chipAnchors`) and reprojected after every render; chips whose anchor faces away dim (`.far`). Pump/flow pills + runtime counters sit in static strips along the scene bottom | glycol out/in at the stubs, demand over the top, reservoir at the filler cap, circuit low sides at the compressors, high sides + fan % at the back zones |
+| Reservoir | 70×154×110 gray-steel tank (base rail to top skin, full depth to the back panel) + filler cap (r 5) through the top skin | left third, same end as its stubs, (−75, 4, −2); cap (−105, 87, 30) |
+| Condenser zones | 2 see-through mesh screens (148×69, canvas-tiled texture) over real openings in the back skin, stacked A over B, spanning x −40…+108 (hugging the control-box end, per the rear-view drawing); two fans per screen, each 5 curved ring-sector blades on a hub, recessed inside behind it | back, screens z −60, fans z −53 |
+| Zone labels | "A"/"B" canvas sprites | beside each fan row |
+
+Live bindings: `tick()` fills the chips by element id exactly as it did when they
+were side panels (no data flows through the module — it only positions them), and
+via the `unit3d` bridge const the fans spin at the live fan-speed % (100 % =
+2.5 rev/s — display calibration, not physics) and the compressor cylinders light
+up while their circuit runs. Behavior: 36 s turntable until the first drag stops
+it for good, drag to rotate (pitch clamped −30°…80°) — the high-side chips live
+on the back, so the turntable (or a drag) tours all readings —
+`prefers-reduced-motion` gets a static pose repainted every refresh.
+
+#### Spec comparison (2026-07-12, install drawings + factory photos)
+
+Checked by rotating the rendered model to each reference view (front+right photo,
+front+left photo, rear+right-side drawing, left-side+front drawing).
+
+Matches: overall proportions (exactly the drawing's 93.9 × 48.2 × 66.4); twin
+louvered doors with black frame, center post, and a round badge per door;
+control box on the right end; glycol supply-over-return on the left end, low and
+toward the front; black base rail and edge trim; compressors visible through the
+louvers.
+
+Known deviations, most significant first:
+
+1. **No auxiliary port** on the model's back panel (drawing: bottom corner of
+   the blank third).
+2. Cosmetic: base rail lacks the two forklift cutouts; only the right end panel
+   carries a seal decal (real: both ends); zone letters A/B don't exist on the
+   real unit (kept as a dashboard aid).
+
+Formerly-listed deviations since fixed against the photos: glossy-white
+powder-coat finish with black middle column and corner posts (was brushed
+steel), real G&D seal medallions on the doors and right end (were plain black
+pucks), 10 slats per door with flat side bezels, control box resized to the
+photo.
+
+**The glycol loop.** The chiller never touches beer: it chills an inhibited
+propylene-glycol/water mix that circulates out to the fermenter and brite-tank
+jackets. Warm glycol returns from the process (**in**, reg 69), collects in the
+reservoir (temp reg 132, level via web var), is pumped through each circuit's
+evaporator, and leaves as chilled supply (**out**, reg 68) held at the cooling
+setpoint (CoolSetP, reg 70) — high-20s °F for beer, which is why the loop runs
+glycol and not plain water. ΔT (in − out) is how much heat is being removed right
+now. Two pumps: the **chiller pump** circulates glycol through the evaporators, the
+**process pump** pushes it out to the tanks. A flow switch per circuit (Flow A/B
+pills) is a safety: no flow with a compressor running would freeze and burst the
+evaporator, so the controller locks the circuit out — that's why those dots go red.
+
+**The refrigeration cycle** (per circuit — this is what the high side / low side
+columns on the page mean):
+
+1. **Compressors** (high side) squeeze refrigerant vapor to high pressure and
+   temperature — discharge pressure (reg 3/35) and its saturation temperature,
+   condensing temp (reg 4/36).
+2. **Condenser** — the hot vapor condenses to liquid in the coil as the back-panel
+   fans pull ambient air through the cabinet; fan speed (%) modulates to hold
+   discharge pressure in range (head-pressure control), so on cold days the fans
+   barely turn.
+3. **Electronic expansion valve** (EEV position %, driven by a Carel EVD module —
+   status reg 28) — high-pressure liquid flashes across the valve to low pressure
+   and gets very cold.
+4. **Evaporator** (low side) — the cold refrigerant boils in the plate heat
+   exchanger, absorbing heat from the glycol: suction pressure (reg 10/42) and
+   evaporating temp (reg 11/43) describe this side. The EVD trims the valve to hold
+   **suction superheat** (suction temp 9/41 minus evaporating temp = reg 23/55) a
+   few degrees positive — too little risks liquid slugging the compressors, too
+   much starves the evaporator and wastes capacity.
+5. The vapor returns to the compressors and the loop repeats.
+
+**Control.** The c.pCO compares glycol supply temperature to the setpoint, computes
+a cooling demand (power request %, reg 1), and stages circuits/compressors to match.
+Chiller status (reg 0) is a small enum — 1 Standby, 2 Off—alarm, … 9 Running — shown
+as the header dot. Everything here is read-only: setpoints live in HOLDING registers
+the dashboard never writes.
+
 ## Quick start (dev machine)
 
 The production copy runs on the on-site Pi (below); this is for hacking on it locally:
@@ -29,22 +139,25 @@ The production copy runs on the on-site Pi (below); this is for hacking on it lo
 ./teleport_split.sh          # sudo; re-run after every Teleport reconnect
 
 # 2. Run the dashboard
-npm install        # one-time; installs modbus-serial + uplot
+npm install        # one-time; installs modbus-serial + uplot + three
 npm start          # CHILLER_IP=... PORT=... node chiller_dashboard.js
+npm run dev        # same, but auto-restarts when chiller_dashboard.js or dashboard.html change (dev only)
 ```
 
 | Route      | Serves                                                                  |
 |------------|-------------------------------------------------------------------------|
-| `/`        | Minimal Linear-inspired page: glycol in→out hero (out tinted amber above 30 °F, red above 40 °F — the same bands `slackPayload` uses) with setpoint/ΔT/reservoir/supply-pressure/cooling-demand facts, per-circuit columns grouped high side (discharge, condensing, fan) / low side (suction, evaporating, superheat, EEV) with compressor run/idle state, pump/flow status dots, runtime counters, glycol history chart (6 h/24 h/7 d, °F axis, dashed line = current setpoint — the log has no setpoint column, so no history for it; green strips along the bottom mark when each circuit's compressors were running, A above B), a slowly rotating pure-CSS 3D model of the unit styled after the real G&D cabinet — white panels, black trim and base rail, twin louvered doors with logo badges, control box on the right end (proportions from the install drawing, no 3D library); four condenser fans (two per circuit) spin at their live reported speeds in the two condenser zones stacked on the left 2/3 of the back panel (A above B, reservoir panel on the right third, per the rear-view drawing), and the two compressors glimpsed through the front louvers brighten while running, raw-register table under a disclosure; re-renders in place every 5 s. On wide screens (≥1100px) it becomes a full-width grid — glycol panel beside the circuit columns, chart spanning both. A failed refresh dims the data and stamps the header "offline · data N min old" |
+| `/`        | Minimal Linear-inspired page built around the slowly rotating three.js 3D model of the unit (a full-viewport-width strip; drag to rotate it by hand — the first drag stops the turntable), styled after the real G&D cabinet — glossy-white powder-coat PBR panels with environment reflections, black trim, middle column, corner posts and base rail, twin louvered doors with G&D-seal logo badges (a third seal on the right end), control box on the right end (proportions from the install drawing); four condenser fans spin at their live reported speeds behind the back screens, and the two compressors glimpsed through the front louvers light up while running. **Every live reading is a chip pinned to its component on the model** (see "The 3D unit model" above): glycol out (tinted amber above 30 °F, red above 40 °F — the same bands `slackPayload` uses) + setpoint + supply pressure at the supply stub, in + ΔT at the return stub, cooling demand over the top, reservoir temp at the filler cap, each circuit's low side (suction, evaporating, superheat, EEV) at its compressor, each high side (discharge, condensing, fan %) at its condenser zone on the back — spin the unit to read them; far-side chips dim. Pump/flow status dots and runtime counters run along the scene bottom. Below the model: glycol history chart (6 h/24 h/7 d, °F axis, dashed line = current setpoint — the log has no setpoint column, so no history for it; green strips along the bottom mark when each circuit's compressors were running, A above B) and a raw-register table under a disclosure; re-renders in place every 5 s. A failed refresh dims the data and stamps the header "offline · data N min old" |
 | `/api`     | JSON `{addr: raw_uint16}` of INPUT registers 0..159                     |
 | `/api/web` | JSON `{label: value}` of the 12 web-only points (engineering units)     |
 | `/api/all` | `{"regs": ..., "web": ...}` combined payload the page's refresh loop uses |
 | `/api/log` | CSV slice of the onboard datalogger (`?start=&stop=` in `YYYY-MM-DDThh:mm:ss`), served instantly from an in-process cache that also persists to `log_cache.csv` (gitignored; `LOG_FILE` overrides the path) — a restart reloads 7 d instantly and backfills only the gap since the last saved row, instead of re-downloading everything (~15 min). The controller needs ~60 s per `getlog.csv` query (measured), so the backfill fetches 6 h chunks newest-first (each buffered whole, then merged), then polls only the tail every `LOG_POLL_MIN` min (default 5). `X-Log-Loading: 1` header while the backfill runs, which the page shows as an indefinite "backfilling…" indicator |
 | `/uplot.js` `/uplot.css` | [uPlot](https://github.com/leeoniya/uPlot) assets, vendored from `node_modules` (no CDN) |
+| `/three.js` `/three.core.min.js` | [three.js](https://threejs.org) module build for the 3D unit model, vendored from `node_modules` (no CDN; the module imports `./three.core.min.js`, hence the second route) |
+| `/logo.svg` | G&D Chillers seal (`gd_seal.svg`, svgo-minified vendor art) — the page paints it onto the 3D unit's door badges |
 
 `CHILLER_IP` overrides the target (default 192.168.1.69); `CHILLER_REGS` the read span
 (default 160); `PORT` the listen port (default 8000). Needs Node 18+ (uses native
-`fetch`); dependencies are `modbus-serial` and `uplot`. Auth is deliberately absent —
+`fetch`); dependencies are `modbus-serial`, `uplot` and `three`. Auth is deliberately absent —
 Cloudflare Access is the intended front when exposed.
 
 Env vars can live in a gitignored `.env` next to the code (`KEY=value` lines, loaded
@@ -262,10 +375,11 @@ Cloudflare Access in front of it would remove the VPN requirement entirely for r
   persistence (`readLog`, `logInsert`, `log_cache.csv`), `node:http` routes.
   No framework.
 - `dashboard.html` — the page (HTML/CSS/client JS), including the uPlot history
-  chart and the CSS-3D unit model (fan spin driven by a small rAF loop);
+  chart and the three.js unit model (glossy-white PBR, fans spun by the render
+  loop at live speed, drag-to-rotate via pointer events);
   served verbatim at `/`.
-- `package.json` — declares the two dependencies (`modbus-serial`, `uplot`) and
-  `start`/`test`.
+- `package.json` — declares the three dependencies (`modbus-serial`, `uplot`,
+  `three`) and `start`/`test`.
 - `test.js` — offline self-check (scale/sign, CSV row parse, page wiring). `npm test`.
 - `correlate_registers.py` — register↔variable mapper (above); the only Python left.
 - `teleport_split.sh` — Teleport split-tunnel fix (above).

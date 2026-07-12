@@ -257,6 +257,17 @@ const PAGE = fs.readFileSync(path.join(__dirname, "dashboard.html"), "utf8");
 // uPlot renders the history chart; vendored from node_modules so the page has no CDN dependency.
 const UPLOT_JS = fs.readFileSync(require.resolve("uplot/dist/uPlot.iife.min.js"));
 const UPLOT_CSS = fs.readFileSync(require.resolve("uplot/dist/uPlot.min.css"));
+// three.js renders the 3D unit model; vendored like uPlot so the page works with
+// no internet. Two files: the module build imports "./three.core.min.js", so the
+// core must be served at that exact path relative to /three.js (both at root).
+// three's exports map blocks subpath resolution, so resolve the package itself
+// (→ build/three.cjs) and read its siblings.
+const THREE_DIR = path.dirname(require.resolve("three"));
+const THREE_JS = fs.readFileSync(path.join(THREE_DIR, "three.module.min.js"));
+const THREE_CORE = fs.readFileSync(path.join(THREE_DIR, "three.core.min.js"));
+// G&D Chillers seal (svgo-minified vendor art) — the page paints it onto the
+// 3D unit's door badges (see the badge block in dashboard.html).
+const LOGO_SVG = fs.readFileSync(path.join(__dirname, "gd_seal.svg"));
 
 async function handle(req, res) {
   const url = req.url.split("?")[0];
@@ -275,6 +286,19 @@ async function handle(req, res) {
   if (url === "/uplot.css") {
     res.writeHead(200, { "Content-Type": "text/css" });
     return res.end(UPLOT_CSS);
+  }
+  // 24 h cache on three.js: ~750 KB combined, and it only changes on an npm update
+  if (url === "/three.js") {
+    res.writeHead(200, { "Content-Type": "text/javascript", "Cache-Control": "public, max-age=86400" });
+    return res.end(THREE_JS);
+  }
+  if (url === "/three.core.min.js") {
+    res.writeHead(200, { "Content-Type": "text/javascript", "Cache-Control": "public, max-age=86400" });
+    return res.end(THREE_CORE);
+  }
+  if (url === "/logo.svg") {
+    res.writeHead(200, { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=86400" });
+    return res.end(LOGO_SVG);
   }
   if (url === "/api/log") {
     // History chart data: instant slice of the in-process cache (see logLoop —

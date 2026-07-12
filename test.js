@@ -16,10 +16,14 @@ for (const anchor of ["glyIn", "comp2", "/api/all", "Raw registers"]) {
   assert.ok(PAGE.includes(anchor), anchor);
 }
 
-// the page script must at least parse — a syntax error kills the whole page
+// the page scripts must at least parse — a syntax error kills the whole page
 // silently (every function, including tick(), just never exists). vm.Script
-// compiles our own page source without running it.
+// compiles our own page source without running it. The 3D-unit module script
+// gets the same check; vm.Script is classic-only, so its import line is
+// stripped before compiling.
 new (require("node:vm").Script)(PAGE.match(/<script>([\s\S]*?)<\/script>/)[1]);
+new (require("node:vm").Script)(
+  PAGE.match(/<script type="module">([\s\S]*?)<\/script>/)[1].replace(/^import .*$/m, ""));
 
 // /api/log param whitelist: controller date format only, nothing else passes through
 assert.ok(TSTAMP.test("2026-07-11T00:00:00"));
@@ -61,7 +65,7 @@ assert.strictEqual(logInsert(logSlice(-Infinity, Infinity) + "\n"), 0);
 // indefinite backfill indicator fed by /api/log's X-Log-Loading header
 for (const anchor of ["/uplot.js", "/api/log", "W_InTempUser", "W_OutTempUser", "ranges",
                       "Comp1Circ1_Dout.Val", "Comp2Circ2_On", "Comp B",
-                      "histpct", "X-Log-Loading"]) {
+                      "histpct", "X-Log-Loading", "/three.js", "unit3d"]) {
   assert.ok(PAGE.includes(anchor), anchor);
 }
 console.log("ok");
