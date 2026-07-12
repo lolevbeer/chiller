@@ -16,6 +16,10 @@
   --bg: #08090c; --line: #1b1d23; --ink: #e2e4ea; --mut: #8a8f98; --dim: #62666e;
   --accent: #7b86e0; --ok: #4cb782; --warn: #d9a132; --bad: #eb5757;
   --hist-in: #d55181; /* history chart "glycol in" series; "out" reuses --accent (CVD-validated pair) */
+  /* per-circuit identity: A blue, B green. The same two colors paint the 3D
+     compressors and every A/B series on the history chart, so the model and the
+     chart read as one thing. --warn/--bad stay reserved for alarm state. */
+  --ckt-a: #4a9fe0; --ckt-b: #4cb782;
 }
 * { box-sizing: border-box; margin: 0; }
 body {
@@ -78,6 +82,12 @@ body.run .chip .t.out.bad { color: var(--bad); }
 .chip .u { color: var(--dim); font-size: 11px; margin-left: 3px; }
 .chip .row { padding: 1px 0; font-size: 12px; gap: 16px; }
 .chip .cst { color: var(--dim); font-weight: 400; font-size: 11px; }
+/* low side / high side headings inside a circuit chip — a hairline rule with the
+   label sitting on it, so the two halves of the loop read as groups without a
+   second card. The first one needs no top rule; the header above it is enough. */
+.chip .sub { display: flex; align-items: center; gap: 7px; margin: 7px 0 3px;
+  font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+.chip .sub::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .chip .bar { width: 44px; }
 .scene .strips { position: absolute; left: 24px; right: 24px; bottom: 6px; z-index: 1;
   display: flex; justify-content: center; align-items: baseline; gap: 24px;
@@ -129,9 +139,22 @@ h2 .cst { color: var(--dim); font-weight: 400; }
 #histpct { margin-left: 10px; font-size: 12px; font-weight: 400; color: var(--dim); }
 #histpct:not(:empty) { animation: histpulse 1.6s ease-in-out infinite; } /* indefinite: pulse while backfilling */
 @keyframes histpulse { 50% { opacity: .35; } }
-#chart { margin-top: 4px; min-height: 220px; }
+#chart { margin-top: 4px; min-height: 260px; }
 #chart .msg { color: var(--dim); font-size: 13px; padding: 90px 0; text-align: center; }
-.u-legend { font: 400 12px "Inter", sans-serif !important; color: var(--mut) !important; }
+/* uPlot's legend is a <table> of stroke swatches by default, which reads as a form.
+   Reflow it into a centered row of pills: a color dot (the series' own stroke, which
+   uPlot inlines as a border-color) and the live value. */
+.u-legend { font: 400 12px "Inter", sans-serif !important; color: var(--mut) !important;
+  display: flex !important; flex-wrap: wrap; justify-content: center; gap: 4px 6px;
+  border: 0 !important; margin-top: 10px !important; }
+.u-legend tr, .u-legend th, .u-legend td { display: inline-flex !important; align-items: center; }
+.u-legend tr { gap: 6px; padding: 3px 10px; border-radius: 999px; background: #ffffff06; }
+.u-legend tr.u-off { opacity: .4; } /* clicked-off series stay legible but recede */
+.u-legend .u-marker { width: 8px !important; height: 8px !important; border-width: 4px !important;
+  border-radius: 999px; margin-right: 6px; }
+.u-legend .u-value { color: var(--ink) !important; font-variant-numeric: tabular-nums; }
+.u-legend .u-series > * { padding: 0 !important; }
+.u-legend .u-series:first-child { display: none !important; } /* the "Time:" row is noise — the x-axis says it */
 /* --- 3D unit: three.js scene (vendored, served at /three.js) — glossy-white
    PBR cabinet with real environment reflections. All geometry and behavior
    live in the module script at the bottom of the page; this div just hosts
@@ -153,7 +176,12 @@ h2 .cst { color: var(--dim); font-weight: 400; }
 .scene.flat .chip { position: static; transform: none; }
 .scene.flat .strips { position: static; width: 100%; margin-top: 6px; }
 details { padding-top: 18px; color: var(--dim); font-size: 13px; }
-summary { cursor: pointer; }
+/* the alert triangle IS the disclosure marker, so drop the default one */
+summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 7px; }
+summary::-webkit-details-marker { display: none; }
+/* the hover title is the only place the log's ~50-event ceiling is stated */
+summary .info { color: var(--mut); flex: none; }
+summary .info svg { display: block; width: 14px; height: 14px; }
 details table { border-collapse: collapse; margin-top: 10px; font-size: 12px; }
 details td, details th { padding: 3px 10px; text-align: left; color: var(--mut); }
 footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
@@ -210,30 +238,32 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
     <div class="chip" id="chipRes">
       <div class="row"><span class="k">reservoir</span><span class="v" id="resT">–</span></div>
     </div>
-    <div class="chip" id="chipA" title="Low side — cold refrigerant absorbing heat from the glycol">
+    <!-- One chip per circuit, holding the whole refrigeration loop: low side (what the
+         evaporator is doing) then high side (what the condenser is doing). The two
+         used to be separate chips pinned front and back — but a circuit only makes
+         sense read as one loop, so they're one card now, anchored at the compressor. -->
+    <div class="chip" id="chipA" title="The complete circuit A loop — low side (evaporator) and high side (condenser)">
       <b><span class="dot" id="comp1"></span>Circuit A <span class="cst" id="cst1"></span></b>
+      <div class="sub">low side</div>
       <div class="row"><span class="k">suction</span><span class="v"><span id="suctP1">–</span> <i>psi</i></span></div>
       <div class="row"><span class="k">evaporating</span><span class="v"><span id="evapT1">–</span> <i>°F</i></span></div>
       <div class="row"><span class="k">suction temp</span><span class="v"><span id="suctT1">–</span> <i>°F</i></span></div>
       <div class="row"><span class="k">superheat</span><span class="v"><span id="ssh1">–</span> <i>°F</i></span></div>
       <div class="row"><span class="k">EEV</span><span class="v"><span class="bar"><i id="eevB1"></i></span><span id="eev1">–</span></span></div>
+      <div class="sub">high side</div>
+      <div class="row"><span class="k">discharge</span><span class="v"><span id="dscgP1">–</span> <i>psi</i></span></div>
+      <div class="row"><span class="k">condensing</span><span class="v"><span id="condT1">–</span> <i>°F</i></span></div>
+      <div class="row"><span class="k">fan</span><span class="v"><span class="bar"><i id="fanB1"></i></span><span id="fan1">–</span></span></div>
     </div>
-    <div class="chip" id="chipB" title="Low side — cold refrigerant absorbing heat from the glycol">
+    <div class="chip" id="chipB" title="The complete circuit B loop — low side (evaporator) and high side (condenser)">
       <b><span class="dot" id="comp2"></span>Circuit B <span class="cst" id="cst2"></span></b>
+      <div class="sub">low side</div>
       <div class="row"><span class="k">suction</span><span class="v"><span id="suctP2">–</span> <i>psi</i></span></div>
       <div class="row"><span class="k">evaporating</span><span class="v"><span id="evapT2">–</span> <i>°F</i></span></div>
       <div class="row"><span class="k">suction temp</span><span class="v"><span id="suctT2">–</span> <i>°F</i></span></div>
       <div class="row"><span class="k">superheat</span><span class="v"><span id="ssh2">–</span> <i>°F</i></span></div>
       <div class="row"><span class="k">EEV</span><span class="v"><span class="bar"><i id="eevB2"></i></span><span id="eev2">–</span></span></div>
-    </div>
-    <div class="chip" id="chipAc" title="High side — hot compressed refrigerant rejecting heat outdoors">
-      <b>Condenser A</b>
-      <div class="row"><span class="k">discharge</span><span class="v"><span id="dscgP1">–</span> <i>psi</i></span></div>
-      <div class="row"><span class="k">condensing</span><span class="v"><span id="condT1">–</span> <i>°F</i></span></div>
-      <div class="row"><span class="k">fan</span><span class="v"><span class="bar"><i id="fanB1"></i></span><span id="fan1">–</span></span></div>
-    </div>
-    <div class="chip" id="chipBc" title="High side — hot compressed refrigerant rejecting heat outdoors">
-      <b>Condenser B</b>
+      <div class="sub">high side</div>
       <div class="row"><span class="k">discharge</span><span class="v"><span id="dscgP2">–</span> <i>psi</i></span></div>
       <div class="row"><span class="k">condensing</span><span class="v"><span id="condT2">–</span> <i>°F</i></span></div>
       <div class="row"><span class="k">fan</span><span class="v"><span class="bar"><i id="fanB2"></i></span><span id="fan2">–</span></span></div>
@@ -254,9 +284,8 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
 </section>
 
 <!-- the controller keeps ~50 events; this is the whole fault history it will admit to -->
-<details><summary>Alarm history</summary><table id="alarmlog"></table></details>
-<details><summary>Raw registers (debug)</summary><table id="raw"></table></details>
-<footer>Read-only · Modbus TCP + getvar.csv + onboard datalogger · refreshes every 5 s</footer>
+<details><summary title="Every fault the controller still holds — its log keeps only ~50 events, so older faults (and the Stop half of a Start/Stop pair) fall off the end."><span class="info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></span>Alarm history</summary><table id="alarmlog"></table></details>
+<footer>refreshes every 5 s</footer>
 
 <script src="/app.js"></script>
 <!-- three.js module resolution for the 3D unit: the postprocessing addons under

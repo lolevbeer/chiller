@@ -32,7 +32,7 @@
 //                              blade size/pitch live there too
 //             zone labels      label() sprites, "A"/"B"
 //   look    M(color, metalness, roughness) makes each material — steel, trim,
-//           dark, bladeMat, COMP_ON/COMP_OFF/COMP_GLOW. Shine comes from the baked env
+//           dark, bladeMat, and COMP (per-circuit off/on/glow). Shine comes from the baked env
 //           panels (k = brightness) plus `sun` and `backlight` (lights the
 //           recessed fans); framing = camera fov 28, z 5, .scene height in CSS.
 //           Bloom = BLOOM_STRENGTH/RADIUS/THRESHOLD on the composer (0 strength
@@ -107,12 +107,21 @@ const M = (color, metalness, roughness) => new THREE.MeshStandardMaterial({ colo
 // "steel" is the cabinet skin: glossy white powder-coat like the real panels
 // (was brushed steel — name kept, every panel references it)
 const steel = M(0xf2f4f6, .08, .2), trim = M(0x16171a, .7, .45), dark = M(0x0d0f13, .2, .85);
-// low metalness: metal is all specular, which reads black inside the cabinet —
-// diffuse is what makes the recessed blades visible under the backlight
-const bladeMat = M(0x9aa3af, .35, .55); bladeMat.side = THREE.DoubleSide; // ring-sector blades are planar
-const COMP_OFF = 0x415062, COMP_ON = 0x5f7ba1; // scroll-compressor steel blue, brighter while running
-const COMP_GLOW = 0x2560a8; // emissive while running — reads as lit even in the louver shadow
-const compMat = [0, 1].map(() => M(COMP_OFF, .8, .4)); // per circuit, recolored live
+// satin metal, not a mirror: a near-mirror blade sweeps the env map's bright spots
+// past the camera once per revolution, which reads as strobing. The high roughness
+// spreads that highlight across the whole sweep and the dimmer base color keeps it
+// under the bloom threshold. Metal is pure specular, so inside the cabinet they'd
+// go black on the env map alone — `backlight` is what keeps the recessed blades lit.
+const bladeMat = M(0x9aa2ad, .55, .55); bladeMat.side = THREE.DoubleSide; // ring-sector blades are planar
+// per-circuit identity: A blue, B green — the same pair as --ckt-a/--ckt-b in
+// dashboard.html, so a compressor here and its series on the history chart match.
+// Each circuit gets an idle (desaturated), running and emissive-glow color; the
+// glow reads as lit even in the louver shadow.
+const COMP = [
+  { off: 0x39505f, on: 0x4a9fe0, glow: 0x1c5f9c }, // A — blue
+  { off: 0x3a5546, on: 0x4cb782, glow: 0x1d6f4c }, // B — green
+];
+const compMat = COMP.map(c => M(c.off, .8, .4)); // per circuit, recolored live
 
 // pitch (outer) → yaw (inner) → unit: same composition as the old CSS transform
 const pitchG = new THREE.Group(), yawG = new THREE.Group(), unit = new THREE.Group();
@@ -289,10 +298,11 @@ const chipAnchors = [ // [chip id, x, y, z (model units)]
   ["chipIn",  -168, -54, 15], // return stub — in temp, ΔT
   ["chipTop",  30, 108, 0],   // over the top skin — cooling demand
   ["chipRes", -105, 106, 30], // reservoir filler cap — reservoir temp
-  ["chipA",   150, 34, 42],   // compressor A — low side
-  ["chipB",   150, -58, 42],  // compressor B — low side
-  ["chipAc",   34, 48, -85],  // condenser zone A (back) — high side + fan
-  ["chipBc",   34, -40, -85], // condenser zone B (back) — high side + fan
+  // One chip per circuit now (low + high side merged — see dashboard.html), so each
+  // is anchored at its own compressor and carries the whole loop. They're taller than
+  // the old low-side-only chips, hence pushed further out in x and spread in y.
+  ["chipA",   168, 50, 42],   // compressor A — the whole circuit A loop
+  ["chipB",   168, -70, 42],  // compressor B — the whole circuit B loop
 ].map(([id, x, y, z]) => { const o = new THREE.Object3D();
   o.position.set(x, y, z); unit.add(o); return [document.getElementById(id), o]; });
 const wp = new THREE.Vector3();
@@ -315,8 +325,8 @@ const render = () => { // every draw funnels through here, so the offscreen/hidd
 // tick() (main script) pokes this after each refresh: recolor comps, redraw.
 // unit3d is app.js's top-level const — global lexical bindings are visible here.
 unit3d.changed = () => {
-  compMat.forEach((m, i) => { const on = unit3d.comps[i];
-    m.color.set(on ? COMP_ON : COMP_OFF); m.emissive.set(on ? COMP_GLOW : 0x000000); });
+  compMat.forEach((m, i) => { const on = unit3d.comps[i], c = COMP[i];
+    m.color.set(on ? c.on : c.off); m.emissive.set(on ? c.glow : 0x000000); });
   // while the rAF loop is drawing every frame the recolor rides the next frame
   // free — render ourselves only when the loop is idle (or absent: noMotion)
   if (noMotion || !(auto || grab || fanSpd[0] > .1 || fanSpd[1] > .1)) render();

@@ -16,7 +16,8 @@ assert.ok(WEB_VARS["Modbus_FB.FanSpA"] === "Fan speed A %");
 const APP = require("node:fs").readFileSync(require("node:path").join(__dirname, "public/app.js"), "utf8");
 const UNIT3D = require("node:fs").readFileSync(require("node:path").join(__dirname, "public/unit3d.js"), "utf8");
 
-for (const anchor of ["glyIn", "comp2", "/app.js", "/unit3d.js", "Raw registers"]) {
+// "Raw registers" was an anchor here until the debug table was dropped from the page
+for (const anchor of ["glyIn", "comp2", "/app.js", "/unit3d.js"]) {
   assert.ok(PAGE.includes(anchor), anchor);
 }
 
@@ -71,7 +72,8 @@ for (const anchor of ["/uplot.js", "ranges", "histpct"]) {
   assert.ok(PAGE.includes(anchor), anchor);
 }
 for (const anchor of ["/api/all", "/api/log", "W_InTempUser", "W_OutTempUser",
-                      "Comp1Circ1_Dout.Val", "Comp2Circ2_On", "Comp B",
+                      // register names keep the controller's spelling; UI labels are spelled out
+                      "Comp1Circ1_Dout.Val", "Comp2Circ2_On", "Compressor B",
                       "X-Log-Loading", "unit3d"]) {
   assert.ok(APP.includes(anchor), anchor);
 }

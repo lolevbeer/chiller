@@ -61,11 +61,6 @@ async function tick() {
     pill("Flow B", w["Glycol flow B ok"], true, "Flow switch, circuit B — red means no flow");
 
   safety(w, d.regs);
-
-  $("raw").innerHTML =
-    "<tr><th>reg</th><th>raw</th><th>÷10</th></tr>" +
-    Object.entries(d.regs).filter(([, v]) => v !== 0)
-      .map(([k, v]) => `<tr><td>${k}</td><td>${v}</td><td>${S(v)}</td></tr>`).join("");
 }
 // --- Safety column (left of the cabinet) ---
 // Everything here answers "is something wrong?", so the resting state is grey and
@@ -267,26 +262,45 @@ function drawHist(data) {
   el.innerHTML = "";
   const css = getComputedStyle(document.documentElement);
   const v = p => css.getPropertyValue(p).trim();
-  const axis = { stroke: v("--dim"), grid: { stroke: v("--line"), width: 1 },
-                 ticks: { stroke: v("--line"), width: 1 }, font: '12px "Inter", sans-serif' };
+  // hairline dashed grid, no tick marks: the data should carry the eye, not the frame
+  const axis = { stroke: v("--dim"), grid: { stroke: v("--line"), width: 1, dash: [3, 5] },
+                 ticks: { show: false }, font: '11px "Inter", sans-serif', gap: 8 };
   const degF = (u, x) => (x == null ? "–" : x.toFixed(1) + " °F");
+  // soft vertical fade under the glycol lines — gives them a floor instead of
+  // leaving them floating as bare strokes. Alpha suffix on the 6-digit hex.
+  // uPlot resolves series.fill once before the plot is laid out, when bbox is still
+  // empty — createLinearGradient throws on the NaN, so fall back to a flat wash
+  // until there's a real box to gradient across.
+  const fade = hex => u => {
+    const { top, height } = u.bbox || {};
+    if (!(height > 0)) return hex + "20";
+    const g = u.ctx.createLinearGradient(0, top, 0, top + height);
+    g.addColorStop(0, hex + "38"); g.addColorStop(1, hex + "00");
+    return g;
+  };
   // compressor run strips: stepped bars at the chart bottom on a fixed hidden
-  // scale (A above B), drawn only while running so idle time stays empty
-  const strip = (label) => ({ label, stroke: v("--ok"), width: 4, scale: "run",
+  // scale (A above B), drawn only while running so idle time stays empty.
+  // Circuit color (--ckt-a/--ckt-b) matches that circuit's compressor in the 3D unit.
+  const strip = (label, ckt) => ({ label, stroke: v(ckt), width: 4, scale: "run",
     paths: uPlot.paths.stepped({ align: 1 }), points: { show: false },
     value: (u, x) => (x == null ? "off" : "on") });
+  const IN = v("--hist-in"), OUT = v("--accent");
   histChart = new uPlot({
-    width: el.clientWidth, height: 220,
+    width: el.clientWidth, height: 260,
+    // one hover dot on the hovered series, sized to be findable on a wall display
+    cursor: { points: { size: 7 }, y: false },
     series: [
       {},
-      { label: "In (return)",  stroke: v("--hist-in"), width: 2, value: degF },
-      { label: "Out (supply)", stroke: v("--accent"),  width: 2, value: degF },
-      strip("Comp A"), strip("Comp B"),
+      { label: "In (return)",  stroke: IN,  width: 2, fill: fade(IN),  value: degF },
+      { label: "Out (supply)", stroke: OUT, width: 2, fill: fade(OUT), value: degF },
+      strip("Compressor A", "--ckt-a"), strip("Compressor B", "--ckt-b"),
       // condensing temps live ~90–130 °F, far above the glycol lines — their own
-      // right-hand scale keeps both readable instead of flattening the glycol detail
-      { label: "Cond A", stroke: v("--warn"), width: 1, scale: "cond", value: degF },
-      { label: "Cond B", stroke: v("--bad"),  width: 1, scale: "cond", value: degF },
-      { label: "Setpoint", stroke: v("--mut"), width: 1, dash: [4, 4], value: degF },
+      // right-hand scale keeps both readable instead of flattening the glycol detail.
+      // Dotted so they read as secondary next to the solid glycol lines they share
+      // a circuit color with.
+      { label: "Condenser A", stroke: v("--ckt-a"), width: 1, dash: [1, 3], scale: "cond", value: degF },
+      { label: "Condenser B", stroke: v("--ckt-b"), width: 1, dash: [1, 3], scale: "cond", value: degF },
+      { label: "Setpoint", stroke: v("--dim"), width: 1, dash: [4, 4], value: degF },
     ],
     scales: { run: { range: [0, 15] } }, // strips occupy the bottom ~10%
     axes: [axis, { ...axis, size: 46, values: (u, vs) => vs.map(x => x + "°") },
