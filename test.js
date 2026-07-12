@@ -16,6 +16,15 @@ for (const anchor of ["glyIn", "comp2", "/api/all", "Raw registers"]) {
   assert.ok(PAGE.includes(anchor), anchor);
 }
 
+// the page scripts must at least parse — a syntax error kills the whole page
+// silently (every function, including tick(), just never exists). vm.Script
+// compiles our own page source without running it. The 3D-unit module script
+// gets the same check; vm.Script is classic-only, so its import line is
+// stripped before compiling.
+new (require("node:vm").Script)(PAGE.match(/<script>([\s\S]*?)<\/script>/)[1]);
+new (require("node:vm").Script)(
+  PAGE.match(/<script type="module">([\s\S]*?)<\/script>/)[1].replace(/^import .*$/m, ""));
+
 // /api/log param whitelist: controller date format only, nothing else passes through
 assert.ok(TSTAMP.test("2026-07-11T00:00:00"));
 for (const bad of ["2026-07-11", "2026-07-11T00:00:00Z", "0;id=1", ""]) {
@@ -48,10 +57,15 @@ const sliced = logSlice(at(0).getTime(), at(6).getTime()).split("\n");
 assert.strictEqual(sliced.length, 3); // header + rows at +0 s and +5 s
 assert.ok(sliced[0].startsWith("TIME") && sliced[1].includes("5.5") && sliced[2].includes("5.6"));
 
-// history chart wiring: uplot assets, section, the log columns the page reads,
-// and the backfill indicator fed by /api/log's X-Log-Progress header
+// disk persistence roundtrip: reloading a saved cache file adds nothing new
+assert.strictEqual(logInsert(logSlice(-Infinity, Infinity) + "\n"), 0);
+
+// history chart wiring: uplot assets, section, the log columns the page reads
+// (temps + per-circuit compressor states for the run strips), and the
+// indefinite backfill indicator fed by /api/log's X-Log-Loading header
 for (const anchor of ["/uplot.js", "/api/log", "W_InTempUser", "W_OutTempUser", "ranges",
-                      "histpct", "X-Log-Progress"]) {
+                      "Comp1Circ1_Dout.Val", "Comp2Circ2_On", "Comp B",
+                      "histpct", "X-Log-Loading", "/three.js", "unit3d"]) {
   assert.ok(PAGE.includes(anchor), anchor);
 }
 console.log("ok");

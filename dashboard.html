@@ -3,7 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Lolev Chiller Monitor</title>
+<title>G&amp;D 7x7H</title>
+<!-- favicon: the MGR mark. A favicon has no page to inherit currentColor from, so
+     the fill is explicit — dark on a light tab bar, light on a dark one. -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><style>path{fill:%2308090c}.s{fill:none;stroke:%2308090c}@media(prefers-color-scheme:dark){path{fill:%23e2e4ea}.s{stroke:%23e2e4ea}}</style><path fill-rule='evenodd' d='M4.5 8.3C4.5 5.1 7 2.7 10.2 2.7H13.8C17 2.7 19.5 5.1 19.5 8.3V13.6L13.1 20.6C12.5 21.25 11.5 21.25 10.9 20.6L4.5 13.6V8.3ZM12 6.7A2.1 2.1 0 1 0 12 10.9A2.1 2.1 0 1 0 12 6.7Z'/><path class='s' d='M5.2 14.5V20.3M18.8 14.5V20.3' stroke-width='2' stroke-linecap='round'/></svg>">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <link href="/uplot.css" rel="stylesheet">
@@ -19,28 +22,69 @@ body {
   background: var(--bg); color: var(--ink);
   font: 400 14px/1.45 "Inter", -apple-system, sans-serif;
   font-variant-numeric: tabular-nums;
-  max-width: 760px; margin: 0 auto; padding: 40px 24px 60px;
+  max-width: 760px; margin: 0 auto; padding: 16px 24px 60px;
+  overflow-x: clip; /* the .scene 100vw breakout must not create a horizontal scrollbar */
 }
-section { padding: 20px 0; border-bottom: 1px solid var(--line); }
-header { display: flex; align-items: center; gap: 10px; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
-header .logo { height: 22px; width: auto; flex: none; color: var(--ink); }
+/* wide screens: the readings live on the model now, so the page is one column —
+   just give the unit + chart more room. ponytail: 1400px ceiling keeps chips near the cabinet */
+@media (min-width: 1100px) { body { max-width: 1400px; padding: 16px 48px 60px; } }
+section { padding: 20px 0; transition: opacity .3s; }
+/* stale data reads as stale: everything below the header dims while offline */
+body.offline section, body.offline details { opacity: .45; }
+/* full-bleed: same 100vw breakout the .scene uses. The breakout escapes the
+   body's horizontal padding, so the header sets its own — a tighter inset than
+   the body gutter, to keep the marks near the viewport edges. */
+/* 1fr auto 1fr: the brand cluster sits in the middle column, so it centers on the
+   header itself — not on the space left over beside the MGR mark */
+header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+  width: 100vw; margin-left: calc(50% - 50vw); padding: 0 24px 20px; }
+header .logo { height: 52px; width: auto; justify-self: start; color: var(--ink); }
 h1 { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+/* unit identity: the vendor seal + model name, sitting in the header to the
+   right of the MGR mark. The seal ships black-on-transparent (gd_seal.svg,
+   served at /logo.svg), so invert it for the dark page — which also matches the
+   white-on-black door badge on the real cabinet. */
+/* explicit columns, so the markup can keep the site (Lolev) before the unit (G&D)
+   while the unit renders centred and the site sits hard right */
+.gd-id { grid-column: 2; }
+.site-id { grid-column: 3; justify-self: end; }
+.unit-id { display: flex; align-items: center; gap: 12px; }
+.unit-id .meta { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 2px; }
+.unit-id .lolev { height: 44px; width: auto; flex: none; color: var(--ink); }
+.site { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+.unit-id .seal { height: 56px; width: 56px; flex: none; filter: invert(1); opacity: .8; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
 .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
-#stat { color: var(--mut); font-size: 13px; display: flex; align-items: center; gap: 7px; margin-left: 4px; }
-#net { margin-left: auto; color: var(--dim); font-size: 12px; }
+#stat { color: var(--mut); font-size: 13px; display: flex; align-items: center; gap: 7px; }
+#stat.warn { color: var(--warn); } #stat.bad { color: var(--bad); }
+#net { color: var(--dim); font-size: 12px; }
 #net.down { color: var(--bad); }
-.hero { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.hero .t { font-size: 30px; font-weight: 500; letter-spacing: -.02em; }
-.hero .t.out { color: var(--accent); }
-.hero .u { color: var(--dim); font-size: 14px; }
-.hero .to { color: var(--dim); font-size: 18px; padding: 0 4px; }
-.facts { display: flex; gap: 28px; flex-wrap: wrap; margin-top: 14px; }
-.facts div { font-size: 13px; color: var(--mut); }
-.facts b { display: block; font-size: 14px; font-weight: 500; color: var(--ink); margin-top: 1px; }
-.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 40px; }
-@media (max-width: 560px) { .cols { grid-template-columns: 1fr; } }
+/* chips: live readings pinned to the model — each is anchored to a 3D point on
+   the unit (chipAnchors in the module) and repositioned after every render;
+   .far marks chips whose anchor faces away from the camera */
+.chip { position: absolute; transform: translate(-50%, -50%); z-index: 1;
+  background: rgba(8, 9, 12, .78); border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 10px; pointer-events: none; white-space: nowrap; transition: opacity .3s; }
+.chip.far { opacity: .3; }
+.chip b { font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.chip .t { font-size: 17px; font-weight: 500; letter-spacing: -.02em; transition: color 1s; }
+/* in/out colors only while the chiller runs (body.run — either compressor on):
+   standby reads plain ink, and the 1 s transition fades white → color on start.
+   warm return reads red, chilled supply reads blue — same pair as the history chart */
+body.run .chip .t.out { color: var(--accent); }
+body.run .chip .t.in { color: var(--hist-in); }
+body.run .chip .t.out.warn { color: var(--warn); }
+body.run .chip .t.out.bad { color: var(--bad); }
+.chip .u { color: var(--dim); font-size: 11px; margin-left: 3px; }
+.chip .row { padding: 1px 0; font-size: 12px; gap: 16px; }
+.chip .cst { color: var(--dim); font-weight: 400; font-size: 11px; }
+.chip .bar { width: 44px; }
+.scene .strips { position: absolute; left: 24px; right: 24px; bottom: 6px; z-index: 1;
+  display: flex; justify-content: center; align-items: baseline; gap: 24px;
+  flex-wrap: wrap; pointer-events: none; }
+.strips .hours { margin-top: 0; }
 h2 { font-size: 13px; font-weight: 600; color: var(--ink); display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
+h2 .cst { color: var(--dim); font-weight: 400; }
 .row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
 .row .k { color: var(--mut); }
 .row .v { color: var(--ink); font-weight: 500; }
@@ -51,81 +95,131 @@ h2 { font-size: 13px; font-weight: 600; color: var(--ink); display: flex; align-
 .pills span { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--mut); }
 .hours { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 12px; font-size: 12px; color: var(--dim); }
 .hours b { color: var(--mut); font-weight: 500; }
-#ranges { display: flex; gap: 6px; margin-left: auto; }
-#ranges button { background: none; border: 1px solid var(--line); color: var(--mut);
-  font: 500 12px "Inter", sans-serif; padding: 3px 10px; border-radius: 5px; cursor: pointer; }
-#ranges button.on { color: var(--ink); border-color: var(--dim); }
+/* segmented control: one bordered group, filled active segment (outer radius = inner + padding) */
+#ranges { display: flex; gap: 2px; margin-left: auto; padding: 2px; border-radius: 8px; }
+#ranges button { background: none; border: 0; color: var(--mut);
+  font: 500 12px "Inter", sans-serif; padding: 5px 12px; border-radius: 6px; cursor: pointer;
+  transition-property: background-color, color; transition-duration: 150ms; }
+#ranges button:hover { color: var(--ink); }
+#ranges button.on { color: var(--ink); background: var(--line); }
 #histpct { margin-left: 10px; font-size: 12px; font-weight: 400; color: var(--dim); }
+#histpct:not(:empty) { animation: histpulse 1.6s ease-in-out infinite; } /* indefinite: pulse while backfilling */
+@keyframes histpulse { 50% { opacity: .35; } }
 #chart { margin-top: 4px; min-height: 220px; }
 #chart .msg { color: var(--dim); font-size: 13px; padding: 90px 0; text-align: center; }
 .u-legend { font: 400 12px "Inter", sans-serif !important; color: var(--mut) !important; }
+/* --- 3D unit: three.js scene (vendored, served at /three.js) — glossy-white
+   PBR cabinet with real environment reflections. All geometry and behavior
+   live in the module script at the bottom of the page; this div just hosts
+   the canvas. --- */
+/* full-bleed strip: the model + chips span the whole viewport, the rest of the
+   page keeps its column (100vw breakout; body overflow-x: clip eats the sliver
+   a classic scrollbar would add) */
+.scene { position: relative; height: min(41vw, 100vh); width: 100vw; margin-left: calc(50% - 50vw);
+  cursor: grab; touch-action: pan-y; } /* pan-y: vertical swipes still scroll the page (the strip spans the whole first
+  mobile viewport); horizontal drags rotate. relative anchors the chips.
+  41vw matches the unit's apparent aspect at the 45 % width fill (fit() in the module) so it isn't height-clipped; 100vh caps it on short windows */
+.scene:active { cursor: grabbing; }
+.scene canvas { display: block; }
+/* no-3D fallback: .flat ships in the markup and the module removes it only after
+   the whole scene builds — if WebGL, /three.js, or any build step fails, the
+   chips lay out as a plain flexbox instead of piling unpositioned at the corner */
+.scene.flat { height: auto; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px;
+  cursor: default; touch-action: auto; }
+.scene.flat .chip { position: static; transform: none; }
+.scene.flat .strips { position: static; width: 100%; margin-top: 6px; }
 details { padding-top: 18px; color: var(--dim); font-size: 13px; }
 summary { cursor: pointer; }
 details table { border-collapse: collapse; margin-top: 10px; font-size: 12px; }
-details td, details th { border: 1px solid var(--line); padding: 3px 10px; text-align: left; color: var(--mut); }
+details td, details th { padding: 3px 10px; text-align: left; color: var(--mut); }
 footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
 </style>
 </head>
 <body>
 <header>
-  <!-- Lolev Beer logo (Logo2025.svg), inlined with currentColor so it follows the theme -->
-  <svg class="logo" viewBox="0 0 480 525" fill="currentColor" aria-label="Lolev Beer">
-    <g transform="translate(0.891391, 0.103758)">
-      <path d="M363.929591,32.8777392 C364.344591,32.1837392 373.280532,19.2163374 388.370735,0 C376.743913,20.4138491 372.271401,29.840822 368.792621,35.6612382 C372.680139,31.884489 381.914097,29.7992254 393.519908,33.2747636 C385.598474,46.5188585 375.595458,50.9180619 363.510861,46.4723735 C360.291902,50.4420376 359.938734,54.3116485 358.129504,57.2137438 C366.054944,53.4594853 379.08283,51.8025648 398.155558,59.5296401 C385.122113,86.6663342 352.61807,81.6996899 350.471525,74.8739529 C347.243501,79.9995012 346.217609,85.02651 344.608609,88.82651 C353.973736,76.6445197 386.731624,82.084775 393.519908,88.82651 C389.47655,110.319379 362.004018,125.933136 336.795351,110.761612 C334.290082,120.611608 332.110733,127.458167 330.687179,137.415307 C331.098139,136.944067 340.035463,119.507926 380.580352,128.286114 C374.342238,173.665359 330.276829,165.11021 327.349533,157.067079 C327.349533,163.816242 325.620843,172.657621 325.344035,192.116626 C332.895399,174.500908 361.011082,167.63506 368.792621,167.277299 C368.709009,170.618224 363.510861,236.04753 325.344035,236.04753 C325.344035,246.891089 325.77485,250.649452 329.112496,262.448121 C332.219654,253.440489 340.035463,247.721568 350.471525,244.111908 C344.608609,265.323548 342.785046,283.277292 351.885115,295.601205 C366.976216,313.523162 389.088417,322.505792 401.401209,329.310436 C413.081517,335.765537 426.297773,341.55226 449.284944,359.322165 C493.25129,394.335583 474.767429,512.340658 472.710011,524.899354 C463.388027,524.667526 457.843894,524.667526 456.077609,524.899354 C456.077609,524.899354 451.962911,524.899354 443.733513,524.899354 C451.633394,471.058728 449.284944,442.417353 449.284944,442.417353 C395.008832,480.26246 347.999951,442.397625 330.687179,420.740305 C343.679465,396.386805 395.081324,366.486047 435.744337,379.361739 C432.064621,371.503301 418.29624,362.87764 404.147409,355.917483 C355.791756,392.814661 299.281229,387.13941 268.873482,344.738506 C292.660132,323.708433 319.792225,314.777033 344.608609,323.708433 C336.838609,317.494016 330.687179,311.039435 327.349533,304.98216 C261.322118,336.538708 251.259675,265.664522 252.040246,250.391172 C267.665252,248.638274 296.126648,251.385838 308.808961,262.448121 C305.440593,250.391172 305.447593,238.945324 305.440593,238.919324 C284.565936,247.721972 252.215658,219.922711 258.079609,163.816242 C290.642446,171.810075 299.327648,175.757077 305.440593,189.91132 C305.440593,175.538288 307.224323,167.277299 308.808961,157.067079 C277.161744,163.128092 261.801482,136.207764 268.873482,101.662764 C273.147836,100.329764 306.411678,98.0453624 316.243678,131.66517 C317.7941,116.39572 325.340806,104.347741 325.344035,104.33972 C303.42328,108.332846 281.802526,80.8489886 297.225085,54.0079696 C312.527733,59.6177941 328.317615,69.1732662 330.687179,89.7503753 C330.786179,89.5396253 335.020478,79.3505768 341.911566,69.1732662 C332.989738,68.0282134 312.398609,59.5296401 323.472609,28.8402421 C336.172777,33.9666583 346.428177,37.9766709 349.61198,55.2684735 C352.23705,50.6801921 354.309428,47.9220162 358.129504,42.3092245 C341.084559,36.2655252 350.038493,19.2163374 356.376493,9.58033745 C363.635971,16.3662086 366.15367,24.1320092 363.929591,32.8777392 Z" transform="translate(365.153882, 262.449677) scale(-1, 1) translate(-365.153882, -262.449677)"></path>
-      <path d="M111.929591,32.8777392 C112.344591,32.1837392 121.280532,19.2163374 136.370735,0 C124.743913,20.4138491 120.271401,29.840822 116.792621,35.6612382 C120.680139,31.884489 129.914097,29.7992254 141.519908,33.2747636 C133.598474,46.5188585 123.595458,50.9180619 111.510861,46.4723735 C108.291902,50.4420376 107.938734,54.3116485 106.129504,57.2137438 C114.054944,53.4594853 127.08283,51.8025648 146.155558,59.5296401 C133.122113,86.6663342 100.61807,81.6996899 98.4715254,74.8739529 C95.2435006,79.9995012 94.2176095,85.02651 92.6086095,88.82651 C101.973736,76.6445197 134.731624,82.084775 141.519908,88.82651 C137.47655,110.319379 110.004018,125.933136 84.795351,110.761612 C82.2900823,120.611608 80.1107331,127.458167 78.6871789,137.415307 C79.0981389,136.944067 88.0354626,119.507926 128.580352,128.286114 C122.342238,173.665359 78.2768286,165.11021 75.3495328,157.067079 C75.3495328,163.816242 73.6208426,172.657621 73.3440353,192.116626 C80.895399,174.500908 109.011082,167.63506 116.792621,167.277299 C116.709009,170.618224 111.510861,236.04753 73.3440353,236.04753 C73.3440353,246.891089 73.7748503,250.649452 77.1124964,262.448121 C80.2196536,253.440489 88.0354626,247.721568 98.4715254,244.111908 C92.6086095,265.323548 90.785046,283.277292 99.885115,295.601205 C114.976216,313.523162 137.088417,322.505792 149.401209,329.310436 C161.081517,335.765537 174.297773,341.55226 197.284944,359.322165 C241.25129,394.335583 222.767429,512.340658 220.710011,524.899354 C211.388027,524.667526 205.843894,524.667526 204.077609,524.899354 C204.077609,524.899354 199.962911,524.899354 191.733513,524.899354 C199.633394,471.058728 197.284944,442.417353 197.284944,442.417353 C143.008832,480.26246 95.9999505,442.397625 78.6871789,420.740305 C91.6794648,396.386805 143.081324,366.486047 183.744337,379.361739 C180.064621,371.503301 166.29624,362.87764 152.147409,355.917483 C103.791756,392.814661 47.2812287,387.13941 16.8734817,344.738506 C40.660132,323.708433 67.7922252,314.777033 92.6086095,323.708433 C84.8386095,317.494016 78.6871789,311.039435 75.3495328,304.98216 C9.32211792,336.538708 -0.740324889,265.664522 0.0402460043,250.391172 C15.665252,248.638274 44.1266483,251.385838 56.8089607,262.448121 C53.4405929,250.391172 53.4475929,238.945324 53.4405929,238.919324 C32.5659359,247.721972 0.215657826,219.922711 6.07960947,163.816242 C38.6424458,171.810075 47.3276484,175.757077 53.4405929,189.91132 C53.4405929,175.538288 55.224323,167.277299 56.8089607,157.067079 C25.1617439,163.128092 9.80148168,136.207764 16.8734817,101.662764 C21.1478361,100.329764 54.4116776,98.0453624 64.2436776,131.66517 C65.7940996,116.39572 73.3408061,104.347741 73.3440353,104.33972 C51.4232803,108.332846 29.8025262,80.8489886 45.2250848,54.0079696 C60.5277326,59.6177941 76.3176147,69.1732662 78.6871789,89.7503753 C78.7861789,89.5396253 83.0204778,79.3505768 89.9115659,69.1732662 C80.9897378,68.0282134 60.3986095,59.5296401 71.4726095,28.8402421 C84.1727771,33.9666583 94.4281768,37.9766709 97.6119802,55.2684735 C100.23705,50.6801921 102.309428,47.9220162 106.129504,42.3092245 C89.0845593,36.2655252 98.0384929,19.2163374 104.376493,9.58033745 C111.635971,16.3662086 114.15367,24.1320092 111.929591,32.8777392 Z"></path>
-    </g>
+  <!-- MGR mark (from ~/Repos/sarene-sales/index.html), inlined with currentColor so it follows the theme -->
+  <svg class="logo" viewBox="0 0 24 24" aria-label="MGR">
+    <path fill-rule="evenodd" fill="currentColor" d="M4.5 8.3C4.5 5.1 7 2.7 10.2 2.7H13.8C17 2.7 19.5 5.1 19.5 8.3V13.6L13.1 20.6C12.5 21.25 11.5 21.25 10.9 20.6L4.5 13.6V8.3ZM12 6.7A2.1 2.1 0 1 0 12 10.9A2.1 2.1 0 1 0 12 6.7Z"/>
+    <path d="M5.2 14.5V20.3M18.8 14.5V20.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
   </svg>
-  <h1>Lolev Chiller Monitor</h1>
-  <span id="stat"><span class="dot" id="statdot"></span><span id="stattxt">connecting</span></span>
-  <span id="net"></span>
+  <!-- markup order is site (Lolev) then unit (G&D); CSS grid places the unit in the
+       centre column and the site hard right (see .site-id / .gd-id) -->
+  <div class="unit-id site-id">
+      <!-- Lolev mark (from ~/Repos/lolev-manager2/src/graphics/Logo.tsx), inlined with currentColor so it follows the theme -->
+      <svg class="lolev" viewBox="0 0 485 530" aria-label="Lolev Beer">
+        <g fill="currentColor" fill-rule="evenodd" transform="translate(.891 .104)">
+          <path d="M363.929591,32.8777392 C364.344591,32.1837392 373.280532,19.2163374 388.370735,0 C376.743913,20.4138491 372.271401,29.840822 368.792621,35.6612382 C372.680139,31.884489 381.914097,29.7992254 393.519908,33.2747636 C385.598474,46.5188585 375.595458,50.9180619 363.510861,46.4723735 C360.291902,50.4420376 359.938734,54.3116485 358.129504,57.2137438 C366.054944,53.4594853 379.08283,51.8025648 398.155558,59.5296401 C385.122113,86.6663342 352.61807,81.6996899 350.471525,74.8739529 C347.243501,79.9995012 346.217609,85.02651 344.608609,88.82651 C353.973736,76.6445197 386.731624,82.084775 393.519908,88.82651 C389.47655,110.319379 362.004018,125.933136 336.795351,110.761612 C334.290082,120.611608 332.110733,127.458167 330.687179,137.415307 C331.098139,136.944067 340.035463,119.507926 380.580352,128.286114 C374.342238,173.665359 330.276829,165.11021 327.349533,157.067079 C327.349533,163.816242 325.620843,172.657621 325.344035,192.116626 C332.895399,174.500908 361.011082,167.63506 368.792621,167.277299 C368.709009,170.618224 363.510861,236.04753 325.344035,236.04753 C325.344035,246.891089 325.77485,250.649452 329.112496,262.448121 C332.219654,253.440489 340.035463,247.721568 350.471525,244.111908 C344.608609,265.323548 342.785046,283.277292 351.885115,295.601205 C366.976216,313.523162 389.088417,322.505792 401.401209,329.310436 C413.081517,335.765537 426.297773,341.55226 449.284944,359.322165 C493.25129,394.335583 474.767429,512.340658 472.710011,524.899354 C463.388027,524.667526 457.843894,524.667526 456.077609,524.899354 C456.077609,524.899354 451.962911,524.899354 443.733513,524.899354 C451.633394,471.058728 449.284944,442.417353 449.284944,442.417353 C395.008832,480.26246 347.999951,442.397625 330.687179,420.740305 C343.679465,396.386805 395.081324,366.486047 435.744337,379.361739 C432.064621,371.503301 418.29624,362.87764 404.147409,355.917483 C355.791756,392.814661 299.281229,387.13941 268.873482,344.738506 C292.660132,323.708433 319.792225,314.777033 344.608609,323.708433 C336.838609,317.494016 330.687179,311.039435 327.349533,304.98216 C261.322118,336.538708 251.259675,265.664522 252.040246,250.391172 C267.665252,248.638274 296.126648,251.385838 308.808961,262.448121 C305.440593,250.391172 305.447593,238.945324 305.440593,238.919324 C284.565936,247.721972 252.215658,219.922711 258.079609,163.816242 C290.642446,171.810075 299.327648,175.757077 305.440593,189.91132 C305.440593,175.538288 307.224323,167.277299 308.808961,157.067079 C277.161744,163.128092 261.801482,136.207764 268.873482,101.662764 C273.147836,100.329764 306.411678,98.0453624 316.243678,131.66517 C317.7941,116.39572 325.340806,104.347741 325.344035,104.33972 C303.42328,108.332846 281.802526,80.8489886 297.225085,54.0079696 C312.527733,59.6177941 328.317615,69.1732662 330.687179,89.7503753 C330.786179,89.5396253 335.020478,79.3505768 341.911566,69.1732662 C332.989738,68.0282134 312.398609,59.5296401 323.472609,28.8402421 C336.172777,33.9666583 346.428177,37.9766709 349.61198,55.2684735 C352.23705,50.6801921 354.309428,47.9220162 358.129504,42.3092245 C341.084559,36.2655252 350.038493,19.2163374 356.376493,9.58033745 C363.635971,16.3662086 366.15367,24.1320092 363.929591,32.8777392 Z" transform="translate(365.153882, 262.449677) scale(-1, 1) translate(-365.153882, -262.449677) "/>
+          <path d="M111.929591,32.8777392 C112.344591,32.1837392 121.280532,19.2163374 136.370735,0 C124.743913,20.4138491 120.271401,29.840822 116.792621,35.6612382 C120.680139,31.884489 129.914097,29.7992254 141.519908,33.2747636 C133.598474,46.5188585 123.595458,50.9180619 111.510861,46.4723735 C108.291902,50.4420376 107.938734,54.3116485 106.129504,57.2137438 C114.054944,53.4594853 127.08283,51.8025648 146.155558,59.5296401 C133.122113,86.6663342 100.61807,81.6996899 98.4715254,74.8739529 C95.2435006,79.9995012 94.2176095,85.02651 92.6086095,88.82651 C101.973736,76.6445197 134.731624,82.084775 141.519908,88.82651 C137.47655,110.319379 110.004018,125.933136 84.795351,110.761612 C82.2900823,120.611608 80.1107331,127.458167 78.6871789,137.415307 C79.0981389,136.944067 88.0354626,119.507926 128.580352,128.286114 C122.342238,173.665359 78.2768286,165.11021 75.3495328,157.067079 C75.3495328,163.816242 73.6208426,172.657621 73.3440353,192.116626 C80.895399,174.500908 109.011082,167.63506 116.792621,167.277299 C116.709009,170.618224 111.510861,236.04753 73.3440353,236.04753 C73.3440353,246.891089 73.7748503,250.649452 77.1124964,262.448121 C80.2196536,253.440489 88.0354626,247.721568 98.4715254,244.111908 C92.6086095,265.323548 90.785046,283.277292 99.885115,295.601205 C114.976216,313.523162 137.088417,322.505792 149.401209,329.310436 C161.081517,335.765537 174.297773,341.55226 197.284944,359.322165 C241.25129,394.335583 222.767429,512.340658 220.710011,524.899354 C211.388027,524.667526 205.843894,524.667526 204.077609,524.899354 C204.077609,524.899354 199.962911,524.899354 191.733513,524.899354 C199.633394,471.058728 197.284944,442.417353 197.284944,442.417353 C143.008832,480.26246 95.9999505,442.397625 78.6871789,420.740305 C91.6794648,396.386805 143.081324,366.486047 183.744337,379.361739 C180.064621,371.503301 166.29624,362.87764 152.147409,355.917483 C103.791756,392.814661 47.2812287,387.13941 16.8734817,344.738506 C40.660132,323.708433 67.7922252,314.777033 92.6086095,323.708433 C84.8386095,317.494016 78.6871789,311.039435 75.3495328,304.98216 C9.32211792,336.538708 -0.740324889,265.664522 0.0402460043,250.391172 C15.665252,248.638274 44.1266483,251.385838 56.8089607,262.448121 C53.4405929,250.391172 53.4475929,238.945324 53.4405929,238.919324 C32.5659359,247.721972 0.215657826,219.922711 6.07960947,163.816242 C38.6424458,171.810075 47.3276484,175.757077 53.4405929,189.91132 C53.4405929,175.538288 55.224323,167.277299 56.8089607,157.067079 C25.1617439,163.128092 9.80148168,136.207764 16.8734817,101.662764 C21.1478361,100.329764 54.4116776,98.0453624 64.2436776,131.66517 C65.7940996,116.39572 73.3408061,104.347741 73.3440353,104.33972 C51.4232803,108.332846 29.8025262,80.8489886 45.2250848,54.0079696 C60.5277326,59.6177941 76.3176147,69.1732662 78.6871789,89.7503753 C78.7861789,89.5396253 83.0204778,79.3505768 89.9115659,69.1732662 C80.9897378,68.0282134 60.3986095,59.5296401 71.4726095,28.8402421 C84.1727771,33.9666583 94.4281768,37.9766709 97.6119802,55.2684735 C100.23705,50.6801921 102.309428,47.9220162 106.129504,42.3092245 C89.0845593,36.2655252 98.0384929,19.2163374 104.376493,9.58033745 C111.635971,16.3662086 114.15367,24.1320092 111.929591,32.8777392 Z"/>
+        </g>
+      </svg>
+    <span class="site">Lolev Beer</span>
+  </div>
+  <div class="unit-id gd-id" title="Proportions from the install drawing (93.9 × 48.2 × 66.4). Fans spin at their live reported speed. Drag to rotate — the high side lives on the back.">
+    <img class="seal" src="/logo.svg" alt="G&amp;D">
+    <div class="meta">
+      <h1>G&amp;D Chillers • 7x7H</h1>
+      <span id="net"></span>
+      <span id="stat"><span class="dot" id="statdot"></span><span id="stattxt">connecting</span></span>
+    </div>
+  </div>
 </header>
 
+<!-- All live readings are chips pinned to the 3D unit (see chipAnchors in the
+     module script): glycol at the supply/return stubs, low side on each
+     compressor, high side + fan on each condenser zone (back), reservoir at
+     the tank, pump/flow pills and runtime along the bottom of the scene.
+     tick() fills them by id exactly as it did when they were side panels. -->
 <section class="hero-wrap">
-  <div class="hero">
-    <span class="t" id="glyIn">–</span><span class="u">°F in</span>
-    <span class="to">→</span>
-    <span class="t out" id="glyOut">–</span><span class="u">°F out</span>
+  <div class="scene flat"><!-- .flat = no-3D fallback layout; the module removes it once WebGL is live -->
+    <div class="chip" id="chipOut">
+      <b><span class="t out" id="glyOut" title="Chilled glycol supply — amber above 30 °F, red above 40 °F (same thresholds as the Slack reports)">–</span><span class="u">°F out</span></b>
+      <div class="row"><span class="k" title="Target supply temperature (CoolSetP)">setpoint</span><span class="v" id="setp">–</span></div>
+      <div class="row"><span class="k">supply</span><span class="v" id="supP">–</span></div>
+    </div>
+    <div class="chip" id="chipIn">
+      <b><span class="t in" id="glyIn" title="Warm glycol returning from the process">–</span><span class="u">°F in</span></b>
+      <div class="row"><span class="k" title="Return minus supply — how much heat the chiller is removing right now">ΔT</span><span class="v" id="dt">–</span></div>
+    </div>
+    <div class="chip" id="chipTop">
+      <div class="row"><span class="k" title="Power request — % of capacity the controller is calling for">cooling demand</span><span class="v" id="pwr">–</span></div>
+    </div>
+    <div class="chip" id="chipRes">
+      <div class="row"><span class="k">reservoir</span><span class="v" id="resT">–</span></div>
+    </div>
+    <div class="chip" id="chipA" title="Low side — cold refrigerant absorbing heat from the glycol">
+      <b><span class="dot" id="comp1"></span>Circuit A <span class="cst" id="cst1"></span></b>
+      <div class="row"><span class="k">suction</span><span class="v"><span id="suctP1">–</span> <i>psi</i></span></div>
+      <div class="row"><span class="k">evaporating</span><span class="v"><span id="evapT1">–</span> <i>°F</i></span></div>
+      <div class="row"><span class="k">suction temp</span><span class="v"><span id="suctT1">–</span> <i>°F</i></span></div>
+      <div class="row"><span class="k">superheat</span><span class="v"><span id="ssh1">–</span> <i>°F</i></span></div>
+      <div class="row"><span class="k">EEV</span><span class="v"><span class="bar"><i id="eevB1"></i></span><span id="eev1">–</span></span></div>
+    </div>
+    <div class="chip" id="chipB" title="Low side — cold refrigerant absorbing heat from the glycol">
+      <b><span class="dot" id="comp2"></span>Circuit B <span class="cst" id="cst2"></span></b>
+      <div class="row"><span class="k">suction</span><span class="v"><span id="suctP2">–</span> <i>psi</i></span></div>
+      <div class="row"><span class="k">evaporating</span><span class="v"><span id="evapT2">–</span> <i>°F</i></span></div>
+      <div class="row"><span class="k">suction temp</span><span class="v"><span id="suctT2">–</span> <i>°F</i></span></div>
+      <div class="row"><span class="k">superheat</span><span class="v"><span id="ssh2">–</span> <i>°F</i></span></div>
+      <div class="row"><span class="k">EEV</span><span class="v"><span class="bar"><i id="eevB2"></i></span><span id="eev2">–</span></span></div>
+    </div>
+    <div class="chip" id="chipAc" title="High side — hot compressed refrigerant rejecting heat outdoors">
+      <b>Condenser A</b>
+      <div class="row"><span class="k">discharge</span><span class="v"><span id="dscgP1">–</span> <i>psi</i></span></div>
+      <div class="row"><span class="k">condensing</span><span class="v"><span id="condT1">–</span> <i>°F</i></span></div>
+      <div class="row"><span class="k">fan</span><span class="v"><span class="bar"><i id="fanB1"></i></span><span id="fan1">–</span></span></div>
+    </div>
+    <div class="chip" id="chipBc" title="High side — hot compressed refrigerant rejecting heat outdoors">
+      <b>Condenser B</b>
+      <div class="row"><span class="k">discharge</span><span class="v"><span id="dscgP2">–</span> <i>psi</i></span></div>
+      <div class="row"><span class="k">condensing</span><span class="v"><span id="condT2">–</span> <i>°F</i></span></div>
+      <div class="row"><span class="k">fan</span><span class="v"><span class="bar"><i id="fanB2"></i></span><span id="fan2">–</span></span></div>
+    </div>
+    <div class="strips"><div class="pills" id="pills"></div><div class="hours" id="hours"></div></div>
   </div>
-  <div class="facts">
-    <div>Setpoint<b id="setp">–</b></div>
-    <div>Reservoir<b id="resT">–</b></div>
-    <div>Supply pressure<b id="supP">–</b></div>
-    <div>Power request<b id="pwr">–</b></div>
-  </div>
-</section>
-
-<section class="cols">
-  <div>
-    <h2><span class="dot" id="comp1"></span>Circuit A</h2>
-    <div class="row"><span class="k">Discharge pressure</span><span class="v"><span id="dscgP1">–</span> <i>psi</i></span></div>
-    <div class="row"><span class="k">Suction pressure</span><span class="v"><span id="suctP1">–</span> <i>psi</i></span></div>
-    <div class="row"><span class="k">Condensing temp</span><span class="v"><span id="condT1">–</span> <i>°F</i></span></div>
-    <div class="row"><span class="k">Evaporating temp</span><span class="v"><span id="evapT1">–</span> <i>°F</i></span></div>
-    <div class="row"><span class="k">Suction temp</span><span class="v"><span id="suctT1">–</span> <i>°F</i></span></div>
-    <div class="row"><span class="k">Suction superheat</span><span class="v" id="ssh1">–</span></div>
-    <div class="row"><span class="k">Fan</span><span class="v"><span class="bar"><i id="fanB1"></i></span><span id="fan1">–</span></span></div>
-    <div class="row"><span class="k">EEV</span><span class="v"><span class="bar"><i id="eevB1"></i></span><span id="eev1">–</span></span></div>
-  </div>
-  <div>
-    <h2><span class="dot" id="comp2"></span>Circuit B</h2>
-    <div class="row"><span class="k">Discharge pressure</span><span class="v"><span id="dscgP2">–</span> <i>psi</i></span></div>
-    <div class="row"><span class="k">Suction pressure</span><span class="v"><span id="suctP2">–</span> <i>psi</i></span></div>
-    <div class="row"><span class="k">Condensing temp</span><span class="v"><span id="condT2">–</span> <i>°F</i></span></div>
-    <div class="row"><span class="k">Evaporating temp</span><span class="v"><span id="evapT2">–</span> <i>°F</i></span></div>
-    <div class="row"><span class="k">Suction temp</span><span class="v"><span id="suctT2">–</span> <i>°F</i></span></div>
-    <div class="row"><span class="k">Suction superheat</span><span class="v" id="ssh2">–</span></div>
-    <div class="row"><span class="k">Fan</span><span class="v"><span class="bar"><i id="fanB2"></i></span><span id="fan2">–</span></span></div>
-    <div class="row"><span class="k">EEV</span><span class="v"><span class="bar"><i id="eevB2"></i></span><span id="eev2">–</span></span></div>
-  </div>
-</section>
-
-<section>
-  <div class="pills" id="pills"></div>
-  <div class="hours" id="hours"></div>
 </section>
 
 <section id="hist">
-  <h2>Glycol history<span id="histpct"></span><span id="ranges">
+  <h2>History<span id="histpct"></span><span id="ranges">
     <button data-h="6" class="on">6 h</button>
     <button data-h="24">24 h</button>
     <button data-h="168">7 d</button>
@@ -133,7 +227,7 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
   <div id="chart"></div>
 </section>
 
-<details><summary>Raw registers</summary><table id="raw"></table></details>
+<details><summary>Raw registers (debug)</summary><table id="raw"></table></details>
 <footer>Read-only · Modbus TCP + getvar.csv + onboard datalogger · refreshes every 5 s</footer>
 
 <script>
@@ -143,6 +237,10 @@ const STATUS = {1:"Standby",2:"Off — alarm",3:"Off — BMS",4:"Off — schedul
 const $ = id => document.getElementById(id);
 const set = (id, txt) => { $(id).textContent = txt; };
 const sh = v => (v < -50 ? "—" : v.toFixed(1));            // sentinel: probe not fitted
+// Bridge to the 3D unit (three.js module script at the bottom of the page —
+// top-level consts here are visible to it): tick() writes live fan speeds and
+// compressor states, then pokes changed(), which the module installs.
+const unit3d = { fans: [0, 0], comps: [false, false], changed: null };
 
 async function tick() {
   let d;
@@ -154,10 +252,15 @@ async function tick() {
 
   const st = d.regs[0];
   set("stattxt", STATUS[st] || "Status " + st);
-  $("statdot").className = "dot " + (st === 9 ? "ok" : st === 2 ? "bad" : "warn");
+  const grade = st === 9 ? "ok" : st === 2 ? "bad" : "warn";
+  $("statdot").className = "dot " + grade;
+  $("stat").className = grade === "ok" ? "" : grade; // text echoes the dot so alarms read at a glance
 
   set("glyIn", r(69).toFixed(1)); set("glyOut", r(68).toFixed(1));
+  // health tint on the supply temp — same bands the Slack reports use (see slackPayload)
+  $("glyOut").className = "t out" + (r(68) > 40 ? " bad" : r(68) > 30 ? " warn" : "");
   set("setp", r(70).toFixed(1) + " °F"); set("resT", r(132).toFixed(1) + " °F");
+  set("dt", (r(69) - r(68)).toFixed(1) + " °F");
   histSetp = r(70); // feeds the history chart's setpoint reference line
   set("supP", (w["Glycol supply pres psi"] ?? NaN).toFixed(1) + " psi");
   set("pwr", (d.regs[1] / 10).toFixed(0) + "%");
@@ -167,19 +270,28 @@ async function tick() {
     set("dscgP" + n, r(base + 3).toFixed(1)); set("suctP" + n, r(base + 10).toFixed(1));
     set("condT" + n, r(base + 4).toFixed(1)); set("evapT" + n, r(base + 11).toFixed(1));
     set("suctT" + n, r(base + 9).toFixed(1)); set("ssh" + n, sh(r(base + 23)));
-    $("comp" + n).className = "dot" + (w["Compressor " + sfx + " on"] ? " ok" : "");
+    const comp = w["Compressor " + sfx + " on"];
+    $("comp" + n).className = "dot" + (comp ? " ok" : "");
+    unit3d.comps[+n - 1] = !!comp; // 3D unit: compressor lights up while running
+    set("cst" + n, comp ? "· comp running" : "· comp idle");
     const fan = w["Fan speed " + sfx + " %"] ?? 0, eev = w["EEV position " + sfx + " %"] ?? 0;
     set("fan" + n, fan.toFixed(0) + "%"); $("fanB" + n).style.width = fan + "%";
+    unit3d.fans[+n - 1] = fan; // drives the 3D unit's fan animation
     set("eev" + n, eev.toFixed(0) + "%"); $("eevB" + n).style.width = eev + "%";
   }
+  // standby = both compressors off: in/out colors (and supply alerts) only show while running
+  document.body.classList.toggle("run", unit3d.comps[0] || unit3d.comps[1]);
+  unit3d.changed?.(); // repaint the 3D unit with the fresh compressor state
 
-  const pill = (name, on, badWhenOff) =>
-    `<span><span class="dot ${on ? "ok" : badWhenOff ? "bad" : ""}"></span>${name}</span>`;
+  const pill = (name, on, badWhenOff, tip) =>
+    `<span title="${tip}"><span class="dot ${on ? "ok" : badWhenOff ? "bad" : ""}"></span>${name}</span>`;
   $("pills").innerHTML =
-    pill("Chiller pump", w["Chiller pump on"]) + pill("Process pump", w["Process pump on"]) +
-    pill("Flow A", w["Glycol flow A ok"], true) + pill("Flow B", w["Glycol flow B ok"], true);
+    pill("Chiller pump", w["Chiller pump on"], false, "Circulates glycol through the chiller") +
+    pill("Process pump", w["Process pump on"], false, "Circulates glycol out to the process") +
+    pill("Flow A", w["Glycol flow A ok"], true, "Flow switch, circuit A — red means no flow") +
+    pill("Flow B", w["Glycol flow B ok"], true, "Flow switch, circuit B — red means no flow");
 
-  $("hours").innerHTML =
+  $("hours").innerHTML = `<span>Runtime</span>` +
     `<span>Comp A <b>${d.regs[135]} h</b></span><span>Comp B <b>${d.regs[141]} h</b></span>` +
     `<span>Fan A <b>${d.regs[158]} h</b></span><span>Pump 2 <b>${d.regs[131]} h</b></span>`;
 
@@ -188,10 +300,16 @@ async function tick() {
     Object.entries(d.regs).filter(([, v]) => v !== 0)
       .map(([k, v]) => `<tr><td>${k}</td><td>${v}</td><td>${S(v)}</td></tr>`).join("");
 }
+let lastGoodMs = 0; // last successful refresh, so "offline" can say how stale the data is
+const age = ms => { const s = Math.round(ms / 1000);
+  return s < 90 ? s + " s" : s < 5400 ? Math.round(s / 60) + " min" : Math.round(s / 3600) + " h"; };
 function net(ok) {
   const el = $("net");
-  el.textContent = ok ? new Date().toLocaleTimeString() : "offline";
+  if (ok) lastGoodMs = Date.now();
+  el.textContent = ok ? "updated " + new Date().toLocaleTimeString()
+                      : "offline" + (lastGoodMs ? " · data " + age(Date.now() - lastGoodMs) + " old" : "");
   el.className = ok ? "" : "down";
+  document.body.classList.toggle("offline", !ok);
 }
 tick(); setInterval(tick, 5000);
 
@@ -204,12 +322,14 @@ const pad = n => String(n).padStart(2, "0");
 const tstr = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T` +
                   `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 
-let histProgress = 100; // server backfill % (X-Log-Progress header); <100 shows the indicator
+let histBackfilling = false; // true while the server backfill runs (X-Log-Loading header)
 
 async function loadHist(hours) {
-  // -> uPlot data [[unix ts], [in °F], [out °F]], or null on failure.
-  // /api/log answers instantly from the server's rolling cache; X-Log-Progress
-  // says how much of the 7 d backfill has landed. stop is padded +1 h: the
+  // -> uPlot data [[unix ts], [in °F], [out °F], [circ A run], [circ B run]],
+  // or null on failure. Run series are strip y-values (fixed "run" scale) while
+  // either of the circuit's compressors is on, null while off.
+  // /api/log answers instantly from the server's rolling cache; X-Log-Loading
+  // says its startup backfill is still running. stop is padded +1 h: the
   // controller clock drifts fast (~25 min ahead as of 2026-07-11), and rows
   // stamped past "now" would otherwise be silently dropped.
   const now = Date.now();
@@ -217,25 +337,34 @@ async function loadHist(hours) {
   let text;
   try {
     const res = await fetch(`/api/log?start=${tstr(start)}&stop=${tstr(stop)}`);
-    histProgress = +(res.headers.get("X-Log-Progress") ?? 100);
+    histBackfilling = res.headers.get("X-Log-Loading") === "1";
     text = await res.text();
   } catch { return null; }
   const rows = text.trim().split(/\r?\n/); // controller CSV is CRLF
   const head = (rows.shift() || "").split(",").map(s => s.replace(/"/g, ""));
   const iT = head.indexOf("TIME"), iIn = head.indexOf("W_InTempUser"), iOut = head.indexOf("W_OutTempUser");
+  // each circuit has two compressor state columns; "running" = either is 1
+  const iA1 = head.indexOf("Comp1Circ1_Dout.Val"), iA2 = head.indexOf("Comp2Circ1_On");
+  const iB1 = head.indexOf("Comp1Circ2_Dout.Val"), iB2 = head.indexOf("Comp2Circ2_On");
   if (iT < 0 || iIn < 0 || iOut < 0) return null;
-  const xs = [], ins = [], outs = [];
+  // missing compressor columns degrade to empty strips (index -1 → NaN → "off"),
+  // which is indistinguishable from idle — say so instead of failing silently
+  if ((iA1 < 0 && iA2 < 0) || (iB1 < 0 && iB2 < 0))
+    console.warn("history: compressor column(s) missing from the log header — run strips will be empty");
+  const xs = [], ins = [], outs = [], as = [], bs = [];
   for (const line of rows) {
     const c = line.split(",");
     if (c.length < head.length) continue;
     const t = new Date(c[iT].slice(0, 19)).getTime() / 1000; // strip +00:00, parse as local
     if (!isFinite(t)) continue;
-    if (xs.length && t - xs[xs.length - 1] > 900) {          // >15 min hole: break the line
-      xs.push(t - 1); ins.push(null); outs.push(null);
+    if (xs.length && t - xs[xs.length - 1] > 900) {          // >15 min hole: break the lines
+      xs.push(t - 1); ins.push(null); outs.push(null); as.push(null); bs.push(null);
     }
     xs.push(t); ins.push(F(parseFloat(c[iIn]))); outs.push(F(parseFloat(c[iOut])));
+    as.push(+c[iA1] || +c[iA2] ? 1.5 : null);                // strip heights on the "run" scale
+    bs.push(+c[iB1] || +c[iB2] ? 0.5 : null);
   }
-  return [xs, ins, outs];
+  return [xs, ins, outs, as, bs];
 }
 
 // Current cooling setpoint (Modbus reg 70, °F), set by tick(). Drawn as a flat
@@ -246,11 +375,10 @@ let histSetp = null;
 let histChart, histHours = 6;
 function drawHist(data) {
   const el = $("chart");
-  $("histpct").textContent = histProgress < 100 ? `backfilling ${histProgress}%` : "";
+  $("histpct").textContent = histBackfilling ? "backfilling…" : "";
   if (histChart) { histChart.destroy(); histChart = null; }
   if (!data || !data[0].length) {
-    el.innerHTML = `<div class="msg">${histProgress < 100
-      ? "loading history… " + histProgress + "%" : "no log data for this range"}</div>`;
+    el.innerHTML = `<div class="msg">${histBackfilling ? "loading history…" : "no log data for this range"}</div>`;
     return;
   }
   el.innerHTML = "";
@@ -259,15 +387,22 @@ function drawHist(data) {
   const axis = { stroke: v("--dim"), grid: { stroke: v("--line"), width: 1 },
                  ticks: { stroke: v("--line"), width: 1 }, font: '12px "Inter", sans-serif' };
   const degF = (u, x) => (x == null ? "–" : x.toFixed(1) + " °F");
+  // compressor run strips: stepped bars at the chart bottom on a fixed hidden
+  // scale (A above B), drawn only while running so idle time stays empty
+  const strip = (label) => ({ label, stroke: v("--ok"), width: 4, scale: "run",
+    paths: uPlot.paths.stepped({ align: 1 }), points: { show: false },
+    value: (u, x) => (x == null ? "off" : "on") });
   histChart = new uPlot({
     width: el.clientWidth, height: 220,
     series: [
       {},
-      { label: "In",  stroke: v("--hist-in"), width: 2, value: degF },
-      { label: "Out", stroke: v("--accent"),  width: 2, value: degF },
+      { label: "In (return)",  stroke: v("--hist-in"), width: 2, value: degF },
+      { label: "Out (supply)", stroke: v("--accent"),  width: 2, value: degF },
+      strip("Comp A"), strip("Comp B"),
       { label: "Setpoint", stroke: v("--mut"), width: 1, dash: [4, 4], value: degF },
     ],
-    axes: [axis, { ...axis, size: 46 }],
+    scales: { run: { range: [0, 15] } }, // strips occupy the bottom ~10%
+    axes: [axis, { ...axis, size: 46, values: (u, vs) => vs.map(x => x + "°") }],
   }, [...data, data[0].map(() => histSetp)], el);
 }
 
@@ -288,10 +423,338 @@ $("ranges").onclick = async e => {
 addEventListener("resize", () => histChart && histChart.setSize({ width: $("chart").clientWidth, height: 220 }));
 histLoading();
 (async function histLoop() {
-  // fast ticks while the server backfills (indicator + chart grow), then 60 s
+  // fast ticks while the server backfills (chart grows chunk by chunk), then 60 s
   drawHist(await loadHist(histHours));
-  setTimeout(histLoop, histProgress < 100 ? 5000 : 60000);
+  setTimeout(histLoop, histBackfilling ? 5000 : 60000);
 })();
+</script>
+<script type="module">
+// --- 3D unit: hand-built three.js model of the cabinet (install-drawing
+// proportions: 93.9 W × 66.4 H × 48.2 D in ≈ 240 × 170 × 123 model units,
+// group scaled ×0.01). Glossy-white powder-coat PBR — reflections come from a
+// tiny hand-built "room" baked into an environment map. Drag to rotate with
+// pitch clamp (the 36 s turntable stays wired via `auto`, off by default),
+// fans at live speed, compressors light up while running, honors
+// prefers-reduced-motion.
+//
+// TWEAK MAP — geometry is authored in model units (1 unit ≈ 0.391 in),
+// origin at the cabinet's center:
+//   axes    +x = right when facing the front (the control-box end), +y = up,
+//           +z = toward the viewer (the louvered-door face).
+//   ranges  x −120…120, y −85…85, z −61.5…61.5. Landmarks: louvers at
+//           z 59.5; right door spans x +5…+114 (left door mirrors); base-rail
+//           top at y −73; door top band bottom at y 61; back skin at z −59.5.
+//   parts   box(w, h, d, x, y, z, material) builds every panel — each call is
+//           commented where it's made. Component index (search the name to
+//           find its commented block, in build order):
+//             cabinet shell    top/bottom/ends/back/base rail — one box() each
+//             louvered doors   InstancedMesh slats; count/size/tilt in its block
+//             control box      single box(), right end
+//             compressors      compGeo = radius/height; zone y in the [y, i]
+//                              pairs (i = circuit index into compMat); x/z in
+//                              position.set
+//             seal badges      badgeGeo + the seal canvas (SVG at /logo.svg)
+//             glycol stubs     portGeo = radius/length; supply y −14, return
+//                              y −37; x −124 = left end
+//             reservoir        the 70×154×110 box + filler-cap cylinder
+//             condenser zones  screens = the y loop over PlaneGeometry(148, 69)
+//                              (mesh weave in the canvas block above it)
+//             fans             bladeGeo/hubGeo; [x, y] spots feed the forEach;
+//                              blade size/pitch live there too
+//             zone labels      label() sprites, "A"/"B"
+//   look    M(color, metalness, roughness) makes each material — steel, trim,
+//           dark, bladeMat, COMP_ON/COMP_OFF/COMP_GLOW. Shine comes from the baked env
+//           panels (k = brightness) plus `sun` and `backlight` (lights the
+//           recessed fans); framing = camera fov 28, z 5, .scene height in CSS.
+//   motion  turntable rate 2π/36 rad/s in frame(); fans 2.5 rev/s at 100 %;
+//           drag feel = DRAG; vertical limits = PITCH_MIN/PITCH_MAX.
+//   chips   chipAnchors = [chip id, x, y, z] pins each DOM reading to the unit;
+//           placeChips() reprojects after every render; .far = anchor faces away.
+import * as THREE from "/three.js";
+
+const host = document.querySelector(".scene");
+const noMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true }); // throws without WebGL — .flat stays on and the chips keep their fallback layout
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); // ponytail: sampled once — a cross-DPR monitor move renders soft until reload
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+host.appendChild(renderer.domElement);
+
+const view = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(28, 1, .1, 50);
+// frame-filling zoom: pull in until the unit spans ~45 % of the scene width
+// (10.7/aspect), floored at 4.4 where the cabinet's apparent height would
+// clip instead (~207 units when pitched to the drag limit)
+const fit = () => { const w = host.clientWidth, h = host.clientHeight;
+  renderer.setSize(w, h); camera.aspect = w / h;
+  camera.position.z = Math.max(4.4, 10.7 / camera.aspect);
+  camera.updateProjectionMatrix(); };
+fit(); new ResizeObserver(() => { fit(); unit3d.changed?.(); }).observe(host); // repaint + re-place chips after a resize (setSize clears the buffer)
+
+{ // fake room baked to a reflection map: dim shell + three overbright panels
+  const env = new THREE.Scene();
+  env.add(new THREE.Mesh(new THREE.SphereGeometry(20),
+    new THREE.MeshBasicMaterial({ color: 0x3d434b, side: THREE.BackSide })));
+  const panel = (w, h, x, y, z, rx, ry, k) => { // k > 1 = overbright "light"
+    const p = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(k, k, k) }));
+    p.position.set(x, y, z); p.rotation.set(rx, ry, 0); env.add(p); };
+  panel(12, 6, 0, 14, 0, Math.PI / 2, 0, 6);    // ceiling light bar
+  panel(20, 3, -15, 4, 0, 0, Math.PI / 2, 2.5); // long side window
+  panel(10, 8, 8, 2, 14, 0, Math.PI, 1.2);      // soft front fill
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  view.environment = pmrem.fromScene(env).texture;
+  pmrem.dispose(); // one-time bake — free the generator's targets and the bake scene
+  env.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); });
+}
+const sun = new THREE.DirectionalLight(0xffffff, 1.4); sun.position.set(3, 5, 4);
+// back light: no shadows in this scene, so it reaches the recessed fans through
+// the screens — without it they render near-black inside the cabinet
+const backlight = new THREE.DirectionalLight(0xffffff, 1); backlight.position.set(-3, 4, -5);
+view.add(sun, backlight, new THREE.AmbientLight(0xffffff, .25));
+
+const M = (color, metalness, roughness) => new THREE.MeshStandardMaterial({ color, metalness, roughness });
+// "steel" is the cabinet skin: glossy white powder-coat like the real panels
+// (was brushed steel — name kept, every panel references it)
+const steel = M(0xf2f4f6, .08, .2), trim = M(0x16171a, .7, .45), dark = M(0x0d0f13, .2, .85);
+// low metalness: metal is all specular, which reads black inside the cabinet —
+// diffuse is what makes the recessed blades visible under the backlight
+const bladeMat = M(0x9aa3af, .35, .55); bladeMat.side = THREE.DoubleSide; // ring-sector blades are planar
+const COMP_OFF = 0x415062, COMP_ON = 0x5f7ba1; // scroll-compressor steel blue, brighter while running
+const COMP_GLOW = 0x2560a8; // emissive while running — reads as lit even in the louver shadow
+const compMat = [0, 1].map(() => M(COMP_OFF, .8, .4)); // per circuit, recolored live
+
+// pitch (outer) → yaw (inner) → unit: same composition as the old CSS transform
+const pitchG = new THREE.Group(), yawG = new THREE.Group(), unit = new THREE.Group();
+view.add(pitchG); pitchG.add(yawG); yawG.add(unit);
+unit.scale.setScalar(.01);
+pitchG.rotation.x = 0; // dead-on front view on load — no downward tilt (drag still pitches −30°…80°)
+
+const box = (w, h, d, x, y, z, mat) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.position.set(x, y, z); unit.add(m); return m; };
+
+// cabinet shell — the front is open behind the louvers so the compressors show
+box(240, 4, 123, 0, 83, 0, steel);       // top
+box(240, 4, 123, 0, -83, 0, dark);       // bottom
+for (const x of [-118, 118]) box(4, 170, 123, x, 0, 0, steel); // end panels
+// back panel in five pieces, leaving two real openings (x −40…108, y 8…77 /
+// −69…0) behind the condenser screens so they actually see through
+box(80, 170, 4, -80, 0, -59.5, steel);   // …blank third at the glycol end
+box(12, 170, 4, 114, 0, -59.5, steel);   // …sliver at the control-box end
+box(148, 8, 4, 34, 81, -59.5, steel);    // …top band
+box(148, 8, 4, 34, 4, -59.5, steel);     // …belt between the zones
+box(148, 16, 4, 34, -77, -59.5, steel);  // …bottom band
+box(244, 12, 127, 0, -79, 0, trim);      // black base rail, slightly proud
+box(240, 24, 4, 0, 73, 59.5, steel);     // door frame: top band…
+for (const x of [-117.8, 117.8]) for (const z of [-59.3, 59.3]) box(6, 159, 6, x, 6.5, z, trim); // …black corner posts, full height, on all four corners (photo), nudged 0.8/0.3 proud of the skins and 1 above the top so no face is coplanar (z-fighting)…
+// …and the black middle column between the doors (photo): runs from the base
+// rail up through the top band, stopping ~1 in (2.5 units) short of the top —
+// proud of the door plane, with a ladder of recessed slots down its center
+box(18, 155, 5, 0, 4.5, 60, trim);
+for (let y = 48.2; y >= -60.2; y -= 13.55) box(10, 7, 1, 0, y, 62.3, dark); // slots track the slat gaps
+// flat door bezels flanking each louver stack (photo: white margins before the louvers)
+for (const x of [-110, -9, 9, 110]) box(8, 134, 4, x, -6, 59.5, steel);
+{ const cb = box(6, 53, 42, 122, 50, 0, M(0xe8ecef, .3, .3)); // control box, right end — upper third of the panel, horizontally centered (end-view drawing)
+  cb.add(new THREE.LineSegments(new THREE.EdgesGeometry(cb.geometry), // edge outline so the white box reads on the white panel
+    new THREE.LineBasicMaterial({ color: 0x141518 }))); }
+unit.add(new THREE.LineSegments( // black edge trim on the cabinet silhouette
+  new THREE.EdgesGeometry(new THREE.BoxGeometry(241, 171, 124)),
+  new THREE.LineBasicMaterial({ color: 0x141518 })));
+
+{ // louvered doors: 10 tilted slats each, gaps show the compressors — slats
+  // span exactly between the door bezels (13..106 from the split, both doors)
+  const slats = new THREE.InstancedMesh(new THREE.BoxGeometry(93, 8, 3), steel, 20);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion().setFromEuler(new THREE.Euler(.55, 0, 0));
+  const one = new THREE.Vector3(1, 1, 1);
+  let i = 0;
+  for (const x of [-59.5, 59.5]) for (let y = 55; y >= -67; y -= 13.55)
+    slats.setMatrixAt(i++, m.compose(new THREE.Vector3(x, y, 59.5), q, one));
+  unit.add(slats);
+}
+// scroll compressors, steel blue — one per zone (A top, B bottom), stacked at
+// the same x just right of the door split, half-height, per the front-view
+// drawing. compGeo = radius/height; A at y 20, B at y −44 (the [y, i] pairs,
+// i = circuit index into compMat); x/z shared in position.set
+const compGeo = new THREE.CylinderGeometry(18, 18, 39, 24);
+[[20, 0], [-44, 1]].forEach(([y, i]) => { const c = new THREE.Mesh(compGeo, compMat[i]);
+  c.position.set(60, y, 36); unit.add(c); });
+// G&D seal on the round door badges, like the real unit: the vendor SVG
+// (served at /logo.svg) is drawn white-on-black onto a canvas mapped to each
+// badge's front cap. Cylinder-cap UVs transpose the axes (u tracks local z,
+// v tracks local x), so the draw is pre-transposed with flipY off — the two
+// transposes cancel and the seal lands upright once the cap faces the camera.
+const seal = document.createElement("canvas"); seal.width = seal.height = 256;
+const sealTex = new THREE.CanvasTexture(seal);
+sealTex.colorSpace = THREE.SRGBColorSpace; sealTex.flipY = false;
+{ const ctx = seal.getContext("2d");
+  ctx.fillStyle = "#0c0d10"; ctx.fillRect(0, 0, 256, 256); // blank black cap until the SVG lands
+  ctx.setTransform(0, 1, 1, 0, 0, 0); // swap the axes (see transpose note above)
+  const img = new Image();
+  img.onload = () => {
+    // the SVG's ink is black and the cap needs it white — ctx.filter="invert(1)"
+    // only shipped in Safari 18, so recolor via source-in on a scratch canvas
+    // (keeps the ink's alpha, turns every inked pixel white) and stamp that on
+    const s = Object.assign(document.createElement("canvas"), { width: 256, height: 256 });
+    const g = s.getContext("2d");
+    g.drawImage(img, 14, 14, 228, 228);
+    g.globalCompositeOperation = "source-in";
+    g.fillStyle = "#fff"; g.fillRect(0, 0, 256, 256);
+    ctx.drawImage(s, 0, 0); // transposed by the transform above, onto the black cap
+    sealTex.needsUpdate = true; unit3d.changed?.();
+  };
+  img.src = "/logo.svg"; }
+const sealMat = new THREE.MeshStandardMaterial({ map: sealTex, metalness: .4, roughness: .5 });
+const badgeGeo = new THREE.CylinderGeometry(7, 7, 3, 20);
+for (const x of [-60, 60]) { const b = new THREE.Mesh(badgeGeo, [trim, sealMat, trim]); // [side, front cap, back cap]
+  b.rotation.x = Math.PI / 2; b.position.set(x, 73, 61); unit.add(b); } // round logo badges
+// third seal low on the control-box end (photo): face front first, then yaw
+// 90° about world Y — a pure yaw keeps the seal upright and un-mirrored
+{ const b = new THREE.Mesh(badgeGeo, [trim, sealMat, trim]);
+  b.rotation.x = Math.PI / 2; b.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+  b.position.set(120.5, -14, 0); unit.add(b); } // centered on the panel, just below mid-height (end-view drawing)
+// glycol stubs, left end, supply above return (drawing): y −14 = supply,
+// y −37 = return; portGeo = radius/length, x −124 = how far they stick out
+const portGeo = new THREE.CylinderGeometry(7, 7, 14, 16);
+for (const y of [-14, -37]) { const p = new THREE.Mesh(portGeo, trim);
+  p.rotation.z = Math.PI / 2; p.position.set(-124, y, 15); unit.add(p); }
+// glycol reservoir: a tank filling the left third (facing the front) behind the
+// left door — same end as its supply/return stubs — full height from the base
+// rail to the top skin and full depth to the back panel (the blank rear third),
+// plus the filler cap poking through the top skin (front-view drawing, top-left)
+box(70, 154, 110, -75, 4, -2, M(0x525a64, .55, .45));
+const cap = new THREE.Mesh(new THREE.CylinderGeometry(5, 5, 6, 12), trim);
+cap.position.set(-105, 87, 30); unit.add(cap);
+
+// condenser zones on the BACK, hugging the control-box end (screen-left when
+// facing the back, per the rear-view drawing — blank reservoir third at the glycol
+// end): one wide see-through mesh screen per zone over a real opening in the
+// back skin, top = A, bottom = B, each spanning its fan pair; fans sit inside
+// the cabinet just behind their screen, curved-sector blades on a hub
+const fans = [], bladeGeo = new THREE.RingGeometry(8, 30, 12, 1, -.55, 1.1),
+  hubGeo = new THREE.CylinderGeometry(9, 9, 8, 16);
+{ // coil faces: fine mesh tiled from a tiny canvas — a see-through guard screen
+  const c = Object.assign(document.createElement("canvas"), { width: 32, height: 32 });
+  const g = c.getContext("2d"); g.strokeStyle = "#1a1d22"; g.lineWidth = 6;
+  g.strokeRect(0, 0, 32, 32);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(44, 20);
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy(); // keeps the mesh from smearing at glancing angles
+  const screen = new THREE.MeshStandardMaterial({ map: t, transparent: true,
+    metalness: .6, roughness: .5, side: THREE.DoubleSide });
+  const geo = new THREE.PlaneGeometry(148, 69);
+  for (const y of [42.5, -34.5]) { const f = new THREE.Mesh(geo, screen);
+    f.position.set(34, y, -60); unit.add(f); }
+}
+[[71.5, 42.5], [-3.5, 42.5], [71.5, -34.5], [-3.5, -34.5]].forEach(([x, y], n) => {
+  const fan = new THREE.Group();
+  const hub = new THREE.Mesh(hubGeo, bladeMat);
+  hub.rotation.x = Math.PI / 2; fan.add(hub);
+  for (let i = 0; i < 5; i++) {
+    const arm = new THREE.Group(), b = new THREE.Mesh(bladeGeo, bladeMat);
+    b.rotation.x = .4; // blade pitch so spinning blades catch light
+    arm.rotation.z = i * 2 * Math.PI / 5; arm.add(b); fan.add(arm);
+  }
+  fan.position.set(x, y, -53); // inside: blades sweep z −59.1…−46.9, clear of the screen at −60
+  fan.rotation.z = THREE.MathUtils.degToRad([0, 90, 45, 135][n]); // staggered so pairs don't spin in lockstep
+  unit.add(fan); fans.push(fan);
+});
+
+// chips: the page's live readings, pinned to the machine. Each anchor is an
+// empty Object3D riding the unit; placeChips() projects it to .scene pixels
+// after every render. tick() fills the chips' inner ids like any DOM node —
+// no data flows through here, only positions.
+const chipAnchors = [ // [chip id, x, y, z (model units)]
+  ["chipOut", -168, -2, 15],  // supply stub — out temp, setpoint, supply psi
+  ["chipIn",  -168, -54, 15], // return stub — in temp, ΔT
+  ["chipTop",  30, 108, 0],   // over the top skin — cooling demand
+  ["chipRes", -105, 106, 30], // reservoir filler cap — reservoir temp
+  ["chipA",   150, 34, 42],   // compressor A — low side
+  ["chipB",   150, -58, 42],  // compressor B — low side
+  ["chipAc",   34, 48, -85],  // condenser zone A (back) — high side + fan
+  ["chipBc",   34, -40, -85], // condenser zone B (back) — high side + fan
+].map(([id, x, y, z]) => { const o = new THREE.Object3D();
+  o.position.set(x, y, z); unit.add(o); return [document.getElementById(id), o]; });
+const wp = new THREE.Vector3();
+const placeChips = () => {
+  const w = host.clientWidth, h = host.clientHeight;
+  for (const [el, o] of chipAnchors) {
+    o.getWorldPosition(wp);
+    el.classList.toggle("far", wp.z < -.35); // behind the cabinet's midplane = facing away
+    wp.project(camera);
+    el.style.left = THREE.MathUtils.clamp((wp.x + 1) / 2 * w, 70, w - 70) + "px"; // clamp: keep chips readable at the edges
+    el.style.top = THREE.MathUtils.clamp((1 - wp.y) / 2 * h, 24, h - 24) + "px"; // vertical clamp too — short scenes (phones) push anchors past the strip
+  }
+};
+let dirty = false; // a draw was skipped while offscreen/hidden — repaint once on re-entry
+const render = () => { // every draw funnels through here, so the offscreen/hidden gate lives here too
+  if (!visible || document.hidden) { dirty = true; return; }
+  dirty = false;
+  renderer.render(view, camera); placeChips();
+};
+// tick() (main script) pokes this after each refresh: recolor comps, redraw.
+// unit3d is the main script's top-level const — global bindings are visible here.
+unit3d.changed = () => {
+  compMat.forEach((m, i) => { const on = unit3d.comps[i];
+    m.color.set(on ? COMP_ON : COMP_OFF); m.emissive.set(on ? COMP_GLOW : 0x000000); });
+  // while the rAF loop is drawing every frame the recolor rides the next frame
+  // free — render ourselves only when the loop is idle (or absent: noMotion)
+  if (noMotion || !(auto || grab || fanSpd[0] > .1 || fanSpd[1] > .1)) render();
+};
+
+// drag to rotate — the auto-turntable is off on load (auto stays wired; flip
+// it true to restore the 36 s tour). The group rotations are the only rotation
+// state (radians), no shadow copies.
+const DRAG = THREE.MathUtils.degToRad(.5); // rad per px of pointer travel
+const PITCH_MIN = THREE.MathUtils.degToRad(-30), PITCH_MAX = THREE.MathUtils.degToRad(80);
+let auto = false, grab = null; // loads front-facing (yaw 0), tilted by the pitch group only
+host.addEventListener("pointerdown", e => {
+  auto = false;
+  grab = { x: e.clientX, y: e.clientY }; host.setPointerCapture(e.pointerId);
+});
+host.addEventListener("pointermove", e => {
+  if (!grab) return;
+  yawG.rotation.y += (e.clientX - grab.x) * DRAG;
+  pitchG.rotation.x = THREE.MathUtils.clamp( // drag down = look from above, same feel as the old CSS model
+    pitchG.rotation.x + (e.clientY - grab.y) * DRAG, PITCH_MIN, PITCH_MAX);
+  grab = { x: e.clientX, y: e.clientY };
+  if (noMotion) render();
+});
+host.addEventListener("pointerup", () => grab = null);
+host.addEventListener("pointercancel", () => grab = null);
+
+let visible = true; // skip drawing while scrolled offscreen (model tops the page, so this bites when scrolled past it)
+const flush = () => { if (dirty) render(); }; // render() re-checks the gate itself
+new IntersectionObserver(([e]) => { visible = e.isIntersecting; flush(); }).observe(host);
+document.addEventListener("visibilitychange", flush);
+let prev = performance.now();
+const fanSpd = [0, 0]; // displayed fan speed % per zone, eased toward unit3d.fans in frame()
+function frame(t) {
+  const dt = Math.min((t - prev) / 1000, .1); prev = t; // clamp: throttled background tabs
+  if (auto) yawG.rotation.y += dt * 2 * Math.PI / 36; // 36 s per revolution
+  // ease displayed speed toward the live target (~3 s exponential time constant)
+  // so the 5 s refreshes don't snap the blades between speeds
+  for (const z of [0, 1]) fanSpd[z] += (unit3d.fans[z] - fanSpd[z]) * Math.min(1, dt / 3);
+  // ponytail: 100% = 2.5 rev/s is display calibration, not physics — tune to taste
+  fans.forEach((f, i) => f.rotation.z -= dt * 2 * Math.PI * 2.5 * fanSpd[i < 2 ? 0 : 1] / 100);
+  // nothing moving (turntable stopped, not dragging, fans parked) → identical pixels, skip the draw;
+  // data changes still show because unit3d.changed() renders on its own
+  if (visible && (auto || grab || fanSpd[0] > .1 || fanSpd[1] > .1)) render();
+  requestAnimationFrame(frame);
+}
+host.classList.remove("flat"); // the whole module built without throwing — drop the no-3D fallback layout (any throw above leaves it on)
+fit(); // .flat changed the host's box; measure the real scene before the first paint
+render(); // initial paint — with the turntable off, frame() skips identical frames and nothing else draws the first one
+if (!noMotion) requestAnimationFrame(frame); // noMotion: unit3d.changed() and drag redraw as needed
+</script>
+<script>
+// Dev live-reload. /reload is an SSE stream the server only mounts under DEV=1
+// (npm run dev); a save restarts the server, the stream drops, EventSource
+// reconnects, and a second open means "new server, new page". In production
+// /reload 404s, EventSource retries quietly, and nothing ever reloads.
+{
+  let opened = false;
+  const es = new EventSource("/reload");
+  es.onopen = () => { if (opened) location.reload(); opened = true; };
+}
 </script>
 </body>
 </html>
