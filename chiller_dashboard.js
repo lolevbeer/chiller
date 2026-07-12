@@ -11,8 +11,10 @@ const ModbusRTU = require("modbus-serial");
 // modbus-serial can leak an async socket error (e.g. connect ETIMEDOUT when the
 // chiller is unreachable) outside the connectTCP promise, which would kill the
 // process as an unhandled rejection. This is a read-only dashboard: log and keep
-// serving — the page shows "offline" until reads succeed again.
-process.on("unhandledRejection", (e) => console.error("unhandled rejection:", e?.message ?? e));
+// serving — the page shows "offline" until reads succeed again. Log the full
+// error (stack included) so an unexpected rejection is diagnosable; logLoop()
+// separately fails fast (see the bottom of the file) so it can't zombie.
+process.on("unhandledRejection", (e) => console.error("unhandled rejection:", e));
 
 const HOST = process.env.CHILLER_IP || "192.168.1.69";
 const PORT = Number(process.env.PORT || 8000);
@@ -64,8 +66,12 @@ async function read() {
   try {
     // connectTCP has no connect timeout of its own (setTimeout above only covers
     // responses) — race it so an unreachable chiller answers null in 5 s, not the
-    // OS's ~75 s. A late loser rejection lands in the unhandledRejection log.
-    await Promise.race([c.connectTCP(HOST, { port: 502 }),
+    // OS's ~75 s. Promise.race marks the loser handled, so its rejection would
+    // otherwise vanish — log it ourselves: it carries the real diagnostic
+    // (ECONNREFUSED vs EHOSTUNREACH vs timed out).
+    const conn = c.connectTCP(HOST, { port: 502 });
+    conn.catch((e) => console.error("modbus connect:", e?.message ?? e));
+    await Promise.race([conn,
       new Promise((_, rej) => setTimeout(rej, 5000, new Error("modbus connect timeout")).unref())]);
     c.setID(1);
     const out = {}; // addr -> raw uint16; chunked: Modbus allows max 125 regs/read
@@ -77,7 +83,10 @@ async function read() {
   } catch {
     return null;
   } finally {
-    try { c.close(); } catch {}
+    // destroy, not close: end() on a still-connecting socket waits out the OS
+    // connect timeout, and each late-accepted socket pins one of the PLC's few
+    // Modbus TCP slots — destroy() aborts the socket immediately
+    try { c.destroy(); } catch {}
   }
 }
 
@@ -153,6 +162,7 @@ const LOG_POLL_MIN = Number(process.env.LOG_POLL_MIN || 5);
 const DAY = 86400e3, PAD = 3600e3; // PAD: controller clock runs fast (~25 min as of 2026-07-11)
 const CHUNK = 6 * 3600e3; // largest query size measured reliable (6 h = 95 s; a full day risks the timeout)
 const logCache = []; // [tMs, csvLine] ascending; 7 d of 5 s samples ≈ 120k rows, ~30 MB
+const logSeen = new Set(); // timestamps in logCache — kept in sync by logInsert (no per-call rebuild)
 let logHeader = "TIME"; // replaced by the real header on first chunk
 let logLoading = true; // true until the startup backfill completes
 
@@ -167,18 +177,28 @@ function logInsert(csv) {
   // (controller quirk), so the first 19 chars parse as local time.
   if (!csv) return 0;
   const rows = csv.trim().split(/\r?\n/);
-  logHeader = rows.shift() || logHeader;
-  const seen = new Set(logCache.map((r) => r[0])); // ponytail: O(n) rebuild per call; readLog throttles flushes to every 5 s
+  // header guard: only a line that looks like the real header may replace
+  // logHeader — a headerless file (e.g. appended after a failed save) or a
+  // non-CSV 200 body must not poison the header /api/log serves. A data-row
+  // first line just falls through to the merge loop below.
+  if (rows[0] && !isFinite(new Date(rows[0].slice(0, 19)).getTime())) {
+    const first = rows.shift();
+    if (first.includes("TIME")) logHeader = first; // anything else (HTML error body etc.) is dropped
+  }
   let added = 0;
   for (const line of rows) {
     const t = new Date(line.slice(0, 19)).getTime();
-    if (!isFinite(t) || seen.has(t)) continue;
-    seen.add(t);
+    if (!isFinite(t) || logSeen.has(t)) continue;
+    logSeen.add(t);
     logCache.push([t, line]);
     added++;
   }
   if (added) logCache.sort((a, b) => a[0] - b[0]);
-  while (logCache.length && logCache[0][0] < Date.now() - LOG_DAYS * DAY - PAD) logCache.shift();
+  const cut = Date.now() - LOG_DAYS * DAY - PAD;
+  if (logCache.length && logCache[0][0] < cut) { // one splice, not shift()-per-row (O(n²) on a stale reload)
+    const keep = logCache.findIndex((r) => r[0] >= cut);
+    for (const r of logCache.splice(0, keep < 0 ? logCache.length : keep)) logSeen.delete(r[0]);
+  }
   return added;
 }
 
@@ -189,32 +209,47 @@ const logSlice = (t0, t1) => // CSV text for a [ms, ms] window, header always in
 // deploy does one — reloads 7 d instantly and backfills only the days missing
 // since the last saved row, instead of re-downloading everything (~15 min).
 const LOG_FILE = process.env.LOG_FILE || path.join(__dirname, "log_cache.csv");
-const saveLog = () => // full rewrite, async; trailing \n so tail appends start on a fresh line
-  fs.promises.writeFile(LOG_FILE, logSlice(-Infinity, Infinity) + "\n").catch(() => {});
+const saveLog = () => // full rewrite via tmp+rename so a crash can't leave a torn file; trailing \n so tail appends start on a fresh line
+  fs.promises.writeFile(LOG_FILE + ".tmp", logSlice(-Infinity, Infinity) + "\n")
+    .then(() => fs.promises.rename(LOG_FILE + ".tmp", LOG_FILE))
+    .catch((e) => console.error("log cache save failed:", e.message)); // never silent — a dead cache re-costs the full backfill
 
-async function logLoop() {
-  try { logInsert(fs.readFileSync(LOG_FILE, "utf8")); } catch {} // no/bad file = cold start
-  const newest = logCache.length ? logCache[logCache.length - 1][0] : 0;
-  // backfill everything between the last saved row (or the 7 d horizon) and
-  // now, newest chunk first so the default 6 h view fills after one query
-  const horizon = Math.max(newest, Date.now() - LOG_DAYS * DAY);
-  for (let stop = Date.now() + PAD; stop > horizon; ) {
-    const start = Math.max(horizon, stop - CHUNK);
+const appendRows = (t0, t1) => { // persist one window's rows, headerless append (reload re-sorts + dedupes)
+  const rows = logSlice(t0, t1).split("\n").slice(1); // drop the header line
+  return rows.length ? fs.promises.appendFile(LOG_FILE, rows.join("\n") + "\n")
+    .catch((e) => console.error("log cache append failed:", e.message)) : Promise.resolve();
+};
+
+// Walk (floor, now+PAD] newest-chunk-first — the largest reliable query is CHUNK
+// (an un-chunked gap after a long outage would exceed the 5 min timeout forever).
+// Each fetched window is appended to disk, so a restart mid-walk resumes instead
+// of re-downloading. retry: keep retrying a failed chunk (backfill) vs bail and
+// let the next poll try again (tail).
+async function fetchBack(floor, retry) {
+  for (let stop = Date.now() + PAD; stop > floor; ) {
+    const start = Math.max(floor, stop - CHUNK);
     const n = await readLog(tstr(new Date(start)), tstr(new Date(stop)));
-    if (n === null) { await sleep(60e3); continue; } // controller busy/offline — retry this chunk
+    if (n === null) { if (!retry) return; await sleep(60e3); continue; } // controller busy/offline
+    if (n) await appendRows(start, stop);
     stop = start;
     await sleep(5e3); // breathe between minute-long queries
   }
+}
+
+async function logLoop() {
+  try { logInsert(await fs.promises.readFile(LOG_FILE, "utf8")); } catch {} // no/bad file = cold start; async read keeps startup requests answering
+  const newest = logCache.length ? logCache[logCache.length - 1][0] : 0;
+  // backfill everything between the last saved row (or the 7 d horizon) and
+  // now, newest chunk first so the default 6 h view fills after one query
+  await fetchBack(Math.max(newest, Date.now() - LOG_DAYS * DAY), true);
   logLoading = false;
-  await saveLog();
+  await saveLog(); // compact once: trims the append-grown file and guarantees it starts with a header
   let lastCompact = Date.now();
   while (true) { // tail poll: only rows newer than the cache
     await sleep(LOG_POLL_MIN * 60e3);
     const last = logCache.length ? logCache[logCache.length - 1][0] : Date.now() - DAY;
-    await readLog(tstr(new Date(last)), tstr(new Date(Date.now() + PAD)));
-    const fresh = logCache.filter((r) => r[0] > last).map((r) => r[1]);
-    if (fresh.length) fs.promises.appendFile(LOG_FILE, fresh.join("\n") + "\n").catch(() => {});
-    // ponytail: append-only file grows ~4 MB/day — a daily rewrite re-trims it to the 7 d window
+    await fetchBack(last, false);
+    // ponytail: appends grow the file ~4 MB/day — a daily rewrite re-trims it to the 7 d window
     if (Date.now() - lastCompact > DAY) { await saveLog(); lastCompact = Date.now(); }
   }
 }
@@ -313,6 +348,13 @@ async function handle(req, res) {
     res.writeHead(200, { "Content-Type": "text/csv", "X-Log-Loading": logLoading ? 1 : 0 });
     return res.end(logSlice(new Date(start).getTime(), new Date(stop).getTime()));
   }
+  // Dev live-reload: an SSE stream that never sends anything. `npm run dev`
+  // (node --watch) kills the process on save, dropping this stream; the page
+  // reconnects and reloads itself. Only mounted when DEV=1.
+  if (url === "/reload" && process.env.DEV) {
+    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+    return res.write(": connected\n\n");
+  }
   if (url === "/api") return json((await read()) || { error: "modbus read failed" });
   if (url === "/api/web") return json((await readWeb()) || { error: "getvar.csv fetch failed" });
   if (url === "/api/all") {
@@ -332,7 +374,10 @@ if (require.main === module) {
     slackReport();
     setInterval(slackReport, SLACK_EVERY_MIN * 60 * 1000);
   }
-  logLoop(); // datalogger cache: 7 d backfill, then tail polling
+  // datalogger cache: 7 d backfill, then tail polling. Fail fast if the loop
+  // ever escapes its own error handling — systemd restarts clean; the
+  // alternative is a zombie serving silently frozen history.
+  logLoop().catch((e) => { console.error("log loop crashed:", e); process.exit(1); });
 }
 
 module.exports = { scale, read, readWeb, readLog, TSTAMP, LABELS, WEB_VARS, ROW, PAGE, slackPayload, logInsert, logSlice };

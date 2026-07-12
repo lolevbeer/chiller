@@ -54,16 +54,16 @@ landmark coordinates, and every adjustable knob).
 | Reading chips | 8 HTML chips holding every live reading, each pinned to a 3D anchor riding the unit (`chipAnchors`) and reprojected after every render; chips whose anchor faces away dim (`.far`). Pump/flow pills + runtime counters sit in static strips along the scene bottom | glycol out/in at the stubs, demand over the top, reservoir at the filler cap, circuit low sides at the compressors, high sides + fan % at the back zones |
 | Reservoir | 70×154×110 gray-steel tank (base rail to top skin, full depth to the back panel) + filler cap (r 5) through the top skin | left third, same end as its stubs, (−75, 4, −2); cap (−105, 87, 30) |
 | Condenser zones | 2 see-through mesh screens (148×69, canvas-tiled texture) over real openings in the back skin, stacked A over B, spanning x −40…+108 (hugging the control-box end, per the rear-view drawing); two fans per screen, each 5 curved ring-sector blades on a hub, recessed inside behind it | back, screens z −60, fans z −53 |
-| Zone labels | "A"/"B" canvas sprites | beside each fan row |
 
 Live bindings: `tick()` fills the chips by element id exactly as it did when they
 were side panels (no data flows through the module — it only positions them), and
 via the `unit3d` bridge const the fans spin at the live fan-speed % (100 % =
 2.5 rev/s — display calibration, not physics) and the compressor cylinders light
-up while their circuit runs. Behavior: 36 s turntable until the first drag stops
-it for good, drag to rotate (pitch clamped −30°…80°) — the high-side chips live
-on the back, so the turntable (or a drag) tours all readings —
-`prefers-reduced-motion` gets a static pose repainted every refresh.
+up while their circuit runs. Behavior: loads front-facing and static with no
+auto-turntable (the 36 s tour is still wired behind the `auto` flag), drag to
+rotate (pitch clamped −30°…80°) — the high-side chips live on the back, so a
+drag tours all readings — `prefers-reduced-motion` gets the same static pose
+repainted every refresh.
 
 #### Spec comparison (2026-07-12, install drawings + factory photos)
 
@@ -81,8 +81,7 @@ Known deviations, most significant first:
 1. **No auxiliary port** on the model's back panel (drawing: bottom corner of
    the blank third).
 2. Cosmetic: base rail lacks the two forklift cutouts; only the right end panel
-   carries a seal decal (real: both ends); zone letters A/B don't exist on the
-   real unit (kept as a dashboard aid).
+   carries a seal decal (real: both ends).
 
 Formerly-listed deviations since fixed against the photos: glossy-white
 powder-coat finish with black middle column and corner posts (was brushed
@@ -141,12 +140,13 @@ The production copy runs on the on-site Pi (below); this is for hacking on it lo
 # 2. Run the dashboard
 npm install        # one-time; installs modbus-serial + uplot + three
 npm start          # CHILLER_IP=... PORT=... node chiller_dashboard.js
-npm run dev        # same, but auto-restarts when chiller_dashboard.js or dashboard.html change (dev only)
+npm run dev        # same, plus live reload: saving chiller_dashboard.js or dashboard.html
+                   # restarts the server and refreshes any open browser tab (dev only)
 ```
 
 | Route      | Serves                                                                  |
 |------------|-------------------------------------------------------------------------|
-| `/`        | Minimal Linear-inspired page built around the slowly rotating three.js 3D model of the unit (a full-viewport-width strip; drag to rotate it by hand — the first drag stops the turntable), styled after the real G&D cabinet — glossy-white powder-coat PBR panels with environment reflections, black trim, middle column, corner posts and base rail, twin louvered doors with G&D-seal logo badges (a third seal on the right end), control box on the right end (proportions from the install drawing); four condenser fans spin at their live reported speeds behind the back screens, and the two compressors glimpsed through the front louvers light up while running. **Every live reading is a chip pinned to its component on the model** (see "The 3D unit model" above): glycol out (tinted amber above 30 °F, red above 40 °F — the same bands `slackPayload` uses) + setpoint + supply pressure at the supply stub, in + ΔT at the return stub, cooling demand over the top, reservoir temp at the filler cap, each circuit's low side (suction, evaporating, superheat, EEV) at its compressor, each high side (discharge, condensing, fan %) at its condenser zone on the back — spin the unit to read them; far-side chips dim. Pump/flow status dots and runtime counters run along the scene bottom. Below the model: glycol history chart (6 h/24 h/7 d, °F axis, dashed line = current setpoint — the log has no setpoint column, so no history for it; green strips along the bottom mark when each circuit's compressors were running, A above B) and a raw-register table under a disclosure; re-renders in place every 5 s. A failed refresh dims the data and stamps the header "offline · data N min old" |
+| `/`        | Minimal Linear-inspired page built around the three.js 3D model of the unit (a full-viewport-width strip loading front-facing and static; drag to rotate it by hand), styled after the real G&D cabinet — glossy-white powder-coat PBR panels with environment reflections, black trim, middle column, corner posts and base rail, twin louvered doors with G&D-seal logo badges (a third seal on the right end), control box on the right end (proportions from the install drawing); four condenser fans spin at their live reported speeds behind the back screens, and the two compressors glimpsed through the front louvers light up while running. **Every live reading is a chip pinned to its component on the model** (see "The 3D unit model" above): glycol out (tinted amber above 30 °F, red above 40 °F — the same bands `slackPayload` uses) + setpoint + supply pressure at the supply stub, in + ΔT at the return stub, cooling demand over the top, reservoir temp at the filler cap, each circuit's low side (suction, evaporating, superheat, EEV) at its compressor, each high side (discharge, condensing, fan %) at its condenser zone on the back — spin the unit to read them; far-side chips dim. Pump/flow status dots and runtime counters run along the scene bottom. Below the model: glycol history chart (6 h/24 h/7 d, °F axis, dashed line = current setpoint — the log has no setpoint column, so no history for it; green strips along the bottom mark when each circuit's compressors were running, A above B) and a raw-register table under a disclosure; re-renders in place every 5 s. A failed refresh dims the data and stamps the header "offline · data N min old" |
 | `/api`     | JSON `{addr: raw_uint16}` of INPUT registers 0..159                     |
 | `/api/web` | JSON `{label: value}` of the 12 web-only points (engineering units)     |
 | `/api/all` | `{"regs": ..., "web": ...}` combined payload the page's refresh loop uses |
@@ -381,6 +381,9 @@ Cloudflare Access in front of it would remove the VPN requirement entirely for r
 - `package.json` — declares the three dependencies (`modbus-serial`, `uplot`,
   `three`) and `start`/`test`.
 - `test.js` — offline self-check (scale/sign, CSV row parse, page wiring). `npm test`.
+- `gd_seal.svg` — G&D Chillers seal (svgo-minified vendor art); served at `/logo.svg`
+  for the page header and the 3D unit's door badges. Required at startup.
+- `CLAUDE.md` — instructions for Claude Code sessions in this repo.
 - `correlate_registers.py` — register↔variable mapper (above); the only Python left.
 - `teleport_split.sh` — Teleport split-tunnel fix (above).
 - `find_registers.py` — superseded single-snapshot matcher; safe to delete.

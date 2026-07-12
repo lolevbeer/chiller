@@ -6,7 +6,7 @@
   "main": "chiller_dashboard.js",
   "scripts": {
     "start": "node chiller_dashboard.js",
-    "dev": "node --watch-path=chiller_dashboard.js --watch-path=dashboard.html chiller_dashboard.js",
+    "dev": "DEV=1 node --watch-path=chiller_dashboard.js --watch-path=dashboard.html chiller_dashboard.js",
     "test": "node test.js"
   },
   "dependencies": {
