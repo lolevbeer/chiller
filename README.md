@@ -36,8 +36,8 @@ deviates from the drawings.
 
 ### The 3D unit model — geometry and spec comparison
 
-One hand-built three.js scene (module script at the bottom of `dashboard.html`;
-a TWEAK MAP comment at the top of that script documents the coordinate system,
+One hand-built three.js scene (`public/unit3d.js`, served at `/unit3d.js`;
+a TWEAK MAP comment at the top of that file documents the coordinate system,
 landmark coordinates, and every adjustable knob).
 1 model unit ≈ 0.391 in: the cabinet is 240 × 170 × 123 units = the drawing's
 93.9 W × 66.4 H × 48.2 D in. +z is the front, +x the control-box end.
@@ -377,10 +377,11 @@ Cloudflare Access in front of it would remove the VPN requirement entirely for r
   cache with disk persistence — `readLog`, `logInsert`, `log_cache.csv`),
   `slack.js` (reporter), `routes.js` (request handler + static assets),
   `config.js` (`.env` + shared `HOST`).
-- `dashboard.html` — the page (HTML/CSS/client JS), including the uPlot history
-  chart and the three.js unit model (glossy-white PBR, fans spun by the render
-  loop at live speed, drag-to-rotate via pointer events);
-  served verbatim at `/`.
+- `dashboard.html` — the page markup + CSS; served verbatim at `/`.
+- `public/` — the page's scripts, served as-is: `app.js` (5 s refresh loop and
+  uPlot history chart) and `unit3d.js` (the three.js unit model — glossy-white
+  PBR, fans spun by the render loop at live speed, drag-to-rotate; an ES module
+  the browser loads natively, no bundler).
 - `package.json` — declares the three dependencies (`modbus-serial`, `uplot`,
   `three`) and `start`/`test`.
 - `test.js` — offline self-check (scale/sign, CSV row parse, page wiring). `npm test`.
