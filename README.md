@@ -157,7 +157,9 @@ npm run dev        # same, plus live reload: saving chiller_dashboard.js or dash
 
 `CHILLER_IP` overrides the target (default 192.168.1.69); `CHILLER_REGS` the read span
 (default 160); `PORT` the listen port (default 8000). Needs Node 18+ (uses native
-`fetch`); dependencies are `modbus-serial`, `uplot` and `three`. Auth is deliberately absent —
+`fetch`); dependencies are `modbus-serial`, `uplot` and `three`. `npm run typecheck`
+runs `tsc` over the JSDoc'd server modules (`jsconfig.json`; dev machines only — the
+Pi can skip the dev deps with `npm install --omit=dev`). Auth is deliberately absent —
 Cloudflare Access is the intended front when exposed.
 
 Env vars can live in a gitignored `.env` next to the code (`KEY=value` lines, loaded
@@ -385,6 +387,8 @@ Cloudflare Access in front of it would remove the VPN requirement entirely for r
 - `package.json` — declares the three dependencies (`modbus-serial`, `uplot`,
   `three`) and `start`/`test`.
 - `test.js` — offline self-check (scale/sign, CSV row parse, page wiring). `npm test`.
+- `jsconfig.json` — `npm run typecheck` config: `tsc --checkJs` over the server
+  modules (no build step; the Pi never runs any of it).
 - `gd_seal.svg` — G&D Chillers seal (svgo-minified vendor art); served at `/logo.svg`
   for the page header and the 3D unit's door badges. Required at startup.
 - `CLAUDE.md` — instructions for Claude Code sessions in this repo.

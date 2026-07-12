@@ -1,0 +1,19 @@
+{
+  // Dev-machine-only type checking of the server (npx tsc -p jsconfig.json).
+  // No build step and nothing here runs on the Pi — it stays plain `node`.
+  // The browser scripts in public/ are excluded: they lean on page globals
+  // (uPlot, the unit3d bridge) and a served "/three.js" import that tsc
+  // can't resolve without a bundler-style setup this repo deliberately avoids.
+  "compilerOptions": {
+    "checkJs": true,
+    // pragmatic level: catch wrong names/arity/shapes without annotating every
+    // callback — the JSDoc on module boundaries carries the useful types
+    "noImplicitAny": false,
+    "strictNullChecks": false,
+    "module": "commonjs",
+    "target": "es2022",
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": ["chiller_dashboard.js", "lib/**/*.js", "test.js"]
+}
