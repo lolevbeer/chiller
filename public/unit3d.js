@@ -35,11 +35,17 @@
 //           dark, bladeMat, COMP_ON/COMP_OFF/COMP_GLOW. Shine comes from the baked env
 //           panels (k = brightness) plus `sun` and `backlight` (lights the
 //           recessed fans); framing = camera fov 28, z 5, .scene height in CSS.
+//           Bloom = BLOOM_STRENGTH/RADIUS/THRESHOLD on the composer (0 strength
+//           disables it); the threshold is the load-bearing one — see its comment.
 //   motion  turntable rate 2π/36 rad/s in frame(); fans 2.5 rev/s at 100 %;
 //           drag feel = DRAG; vertical limits = PITCH_MIN/PITCH_MAX.
 //   chips   chipAnchors = [chip id, x, y, z] pins each DOM reading to the unit;
 //           placeChips() reprojects after every render; .far = anchor faces away.
 import * as THREE from "/three.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 
 const host = document.querySelector(".scene");
 const noMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -50,11 +56,27 @@ host.appendChild(renderer.domElement);
 
 const view = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(28, 1, .1, 50);
+// bloom: the cabinet is white powder-coat, so almost every panel sits near full
+// luminance — THRESHOLD is what keeps this from turning the whole unit into a
+// glowing blob. At .95 only the specular hotspots (the gloss highlights that
+// roll off the door skins and the fan hubs) and the compressor emissive glow
+// bleed, which is what a camera actually does. STRENGTH is the bleed's
+// intensity, RADIUS how far it spreads. Turn STRENGTH to 0 to disable.
+const BLOOM_STRENGTH = .3, BLOOM_RADIUS = .4, BLOOM_THRESHOLD = .85;
+// the composer draws into an offscreen target, which does NOT inherit the
+// canvas's MSAA — without `samples` every edge in the model goes jagged. Half-
+// float keeps highlights above 1.0 so the bloom threshold has something to cut.
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1,
+  { samples: 4, type: THREE.HalfFloatType })); // size is set by fit()
+composer.addPass(new RenderPass(view, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD)); // size is set by fit()
+composer.addPass(new OutputPass()); // the composer bypasses the renderer's own output stage — this re-applies ACES tone mapping + sRGB
+
 // frame-filling zoom: pull in until the unit spans ~45 % of the scene width
 // (10.7/aspect), floored at 4.4 where the cabinet's apparent height would
 // clip instead (~207 units when pitched to the drag limit)
 const fit = () => { const w = host.clientWidth, h = host.clientHeight;
-  renderer.setSize(w, h); camera.aspect = w / h;
+  renderer.setSize(w, h); composer.setSize(w, h); camera.aspect = w / h;
   camera.position.z = Math.max(4.4, 10.7 / camera.aspect);
   camera.updateProjectionMatrix(); };
 fit(); new ResizeObserver(() => { fit(); unit3d.changed?.(); }).observe(host); // repaint + re-place chips after a resize (setSize clears the buffer)
@@ -101,6 +123,12 @@ pitchG.rotation.x = 0; // dead-on front view on load — no downward tilt (drag 
 const box = (w, h, d, x, y, z, mat) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
   m.position.set(x, y, z); unit.add(m); return m; };
 
+// the louver ladder: one pitch, blade thickness and tilt drive BOTH the white
+// door slats and the black separator's blades, so the two can't drift apart —
+// the openings line up row for row across the whole front face.
+const SLAT_Y0 = 55, SLAT_PITCH = 13.55, SLAT_T = 4;
+const SLAT_TILT = .4; // rad (~23°) — the shed angle, shared by the doors and the separator
+
 // cabinet shell — the front is open behind the louvers so the compressors show
 box(240, 4, 123, 0, 83, 0, steel);       // top
 box(240, 4, 123, 0, -83, 0, dark);       // bottom
@@ -116,10 +144,32 @@ box(244, 12, 127, 0, -79, 0, trim);      // black base rail, slightly proud
 box(240, 24, 4, 0, 73, 59.5, steel);     // door frame: top band…
 for (const x of [-117.8, 117.8]) for (const z of [-59.3, 59.3]) box(6, 159, 6, x, 6.5, z, trim); // …black corner posts, full height, on all four corners (photo), nudged 0.8/0.3 proud of the skins and 1 above the top so no face is coplanar (z-fighting)…
 // …and the black middle column between the doors (photo): runs from the base
-// rail up through the top band, stopping ~1 in (2.5 units) short of the top —
-// proud of the door plane, with a ladder of recessed slots down its center
-box(18, 155, 5, 0, 4.5, 60, trim);
-for (let y = 48.2; y >= -60.2; y -= 13.55) box(10, 7, 1, 0, y, 62.3, dark); // slots track the slat gaps
+// rail up through the top band, stopping ~1 in (2.5 units) short of the top.
+// It is NOT a solid bar with painted-on slots — it's built like the real thing:
+// two thin side rails with the channel between them left OPEN, louvered by its
+// own black blades on the door ladder (same pitch, thickness and tilt). So the
+// openings are real — you see into the cabinet through them — and each spans the
+// same height as a door opening (pitch minus blade), lined up row for row.
+// The separator overlaps the door bezels in x (rails at x 5…9, bezels at 5…13),
+// so it MUST clear them in z or the two solids interpenetrate and z-fight. The
+// bezels' front face is at z 61.5; every separator part therefore sits entirely
+// in front of it (rails: 3 deep at 63.2 → z 61.7…64.7 — no shared plane, no
+// overlap), which also gives the raised-divider look.
+const SEP_Z = 63.2;
+for (const x of [-7, 7]) box(4, 155, 3, x, 4.5, SEP_Z, trim); // the two side rails
+{ // the channel is open (louvered) only where the doors have slats; above the top
+  // blade and below the bottom one it's solid, like the doors' plain top band and
+  // bottom margin — an open gap there would look like a hole in the separator.
+  const TOP = 82, BOT = -73;                         // the column's extent
+  const hi = SLAT_Y0 + SLAT_T / 2;                   // top edge of the topmost blade
+  const lo = -67 - SLAT_T / 2;                       // bottom edge of the lowest one
+  box(10, TOP - hi, 3.4, 0, (TOP + hi) / 2, SEP_Z + .2, trim); // solid above the ladder…
+  box(10, lo - BOT, 3.4, 0, (lo + BOT) / 2, SEP_Z + .2, trim); // …and below it
+}
+for (let y = SLAT_Y0; y >= -67; y -= SLAT_PITCH) {   // the blades, bridging the open channel
+  const b = box(10, SLAT_T, 3.4, 0, y, SEP_Z, trim); // proud of the white slats behind them
+  b.rotation.x = SLAT_TILT; // match the doors, or the ladder reads as flat rungs
+}
 // flat door bezels flanking each louver stack (photo: white margins before the louvers)
 for (const x of [-110, -9, 9, 110]) box(8, 134, 4, x, -6, 59.5, steel);
 { const cb = box(6, 53, 42, 122, 50, 0, M(0xe8ecef, .3, .3)); // control box, right end — upper third of the panel, horizontally centered (end-view drawing)
@@ -131,11 +181,11 @@ unit.add(new THREE.LineSegments( // black edge trim on the cabinet silhouette
 
 { // louvered doors: 10 tilted slats each, gaps show the compressors — slats
   // span exactly between the door bezels (13..106 from the split, both doors)
-  const slats = new THREE.InstancedMesh(new THREE.BoxGeometry(93, 8, 3), steel, 20);
-  const m = new THREE.Matrix4(), q = new THREE.Quaternion().setFromEuler(new THREE.Euler(.55, 0, 0));
+  const slats = new THREE.InstancedMesh(new THREE.BoxGeometry(93, SLAT_T, 3), steel, 20); // thin sheet-metal blades — the gap between them carries the look
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion().setFromEuler(new THREE.Euler(SLAT_TILT, 0, 0));
   const one = new THREE.Vector3(1, 1, 1);
   let i = 0;
-  for (const x of [-59.5, 59.5]) for (let y = 55; y >= -67; y -= 13.55)
+  for (const x of [-59.5, 59.5]) for (let y = SLAT_Y0; y >= -67; y -= SLAT_PITCH)
     slats.setMatrixAt(i++, m.compose(new THREE.Vector3(x, y, 59.5), q, one));
   unit.add(slats);
 }
@@ -182,7 +232,10 @@ for (const x of [-60, 60]) { const b = new THREE.Mesh(badgeGeo, [trim, sealMat, 
   b.position.set(120.5, -14, 0); unit.add(b); } // centered on the panel, just below mid-height (end-view drawing)
 // glycol stubs, left end, supply above return (drawing): y −14 = supply,
 // y −37 = return; portGeo = radius/length, x −124 = how far they stick out
-const portGeo = new THREE.CylinderGeometry(7, 7, 14, 16);
+// radius 4 reads as the real 2 in supply/return on screen (was 7, far too fat).
+// ponytail: sized by eye, not by the 0.391 in/unit scale — that math says 2.56,
+// which looked too thin; trust the render.
+const portGeo = new THREE.CylinderGeometry(4, 4, 14, 16);
 for (const y of [-14, -37]) { const p = new THREE.Mesh(portGeo, trim);
   p.rotation.z = Math.PI / 2; p.position.set(-124, y, 15); unit.add(p); }
 // glycol reservoir: a tank filling the left third (facing the front) behind the
@@ -257,7 +310,7 @@ let dirty = false; // a draw was skipped while offscreen/hidden — repaint once
 const render = () => { // every draw funnels through here, so the offscreen/hidden gate lives here too
   if (!visible || document.hidden) { dirty = true; return; }
   dirty = false;
-  renderer.render(view, camera); placeChips();
+  composer.render(); placeChips(); // composer, not renderer.render — the bloom passes live in it
 };
 // tick() (main script) pokes this after each refresh: recolor comps, redraw.
 // unit3d is app.js's top-level const — global lexical bindings are visible here.

@@ -82,7 +82,6 @@ body.run .chip .t.out.bad { color: var(--bad); }
 .scene .strips { position: absolute; left: 24px; right: 24px; bottom: 6px; z-index: 1;
   display: flex; justify-content: center; align-items: baseline; gap: 24px;
   flex-wrap: wrap; pointer-events: none; }
-.strips .hours { margin-top: 0; }
 h2 { font-size: 13px; font-weight: 600; color: var(--ink); display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
 h2 .cst { color: var(--dim); font-weight: 400; }
 .row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
@@ -91,10 +90,35 @@ h2 .cst { color: var(--dim); font-weight: 400; }
 .row .v i { color: var(--dim); font-style: normal; font-weight: 400; }
 .bar { width: 72px; height: 3px; border-radius: 2px; background: var(--line); display: inline-block; vertical-align: middle; margin-right: 8px; }
 .bar i { display: block; height: 100%; border-radius: 2px; background: var(--mut); transition: width .6s; }
+/* --- Safety column: pinned left of the cabinet, the things that mean "stop and
+   look" — refrigerant leak (this is a propane unit), the mechanical pressure
+   switches, and whatever the controller's alarm log holds. Quiet grey when all
+   is well; colour appears only when something is wrong. --- */
+.scene .safety { position: absolute; left: 24px; top: 50%; transform: translateY(-50%); z-index: 1;
+  display: flex; flex-direction: column; gap: 9px; align-items: flex-start;
+  max-width: 215px; font-size: 12px; }
+.scene.flat .safety { position: static; transform: none; max-width: none; }
+.safety h3 { font-size: 10px; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--dim); font-weight: 500; }
+.safety .s { display: flex; align-items: center; gap: 7px; color: var(--mut); }
+.safety .s b { color: var(--ink); font-weight: 500; }
+/* the alarm card is absent entirely when nothing is wrong, so its presence IS the signal */
+.safety .alarm { border-left: 2px solid var(--bad); padding: 4px 0 4px 9px; color: var(--bad);
+  display: flex; flex-direction: column; gap: 2px; }
+.safety .alarm .when { color: var(--mut); font-size: 11px; }
+.safety .last { color: var(--dim); font-size: 11px; line-height: 1.5; }
+.safety .last b { color: var(--mut); font-weight: 500; }
+/* runtime: same column, below the safety block. A/B share a row so the pair reads
+   as a comparison (a big gap between the two = lead/lag wear imbalance) */
+.safety h3.rt { margin-top: 5px; }
+.safety h3 span { text-transform: none; letter-spacing: 0; color: var(--dim); opacity: .7; }
+.safety .hr { display: grid; grid-template-columns: 1fr 44px 44px; gap: 8px;
+  color: var(--dim); font-size: 11px; min-width: 175px; } /* min-width, not width:100% —
+  in the .flat fallback the column shrinks to content and 1fr would collapse */
+.safety .hr b { color: var(--mut); font-weight: 500; text-align: right;
+  font-variant-numeric: tabular-nums; } /* tabular: the two columns line up digit-for-digit */
 .pills { display: flex; gap: 22px; flex-wrap: wrap; }
 .pills span { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--mut); }
-.hours { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 12px; font-size: 12px; color: var(--dim); }
-.hours b { color: var(--mut); font-weight: 500; }
 /* segmented control: one bordered group, filled active segment (outer radius = inner + padding) */
 #ranges { display: flex; gap: 2px; margin-left: auto; padding: 2px; border-radius: 8px; }
 #ranges button { background: none; border: 0; color: var(--mut);
@@ -214,7 +238,9 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
       <div class="row"><span class="k">condensing</span><span class="v"><span id="condT2">–</span> <i>°F</i></span></div>
       <div class="row"><span class="k">fan</span><span class="v"><span class="bar"><i id="fanB2"></i></span><span id="fan2">–</span></span></div>
     </div>
-    <div class="strips"><div class="pills" id="pills"></div><div class="hours" id="hours"></div></div>
+    <!-- left column: leak sensors, pressure switches, alarms, then runtime hours (filled by tick/alarmLoop) -->
+    <div class="safety" id="safety"></div>
+    <div class="strips"><div class="pills" id="pills"></div></div>
   </div>
 </section>
 
@@ -227,10 +253,19 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
   <div id="chart"></div>
 </section>
 
+<!-- the controller keeps ~50 events; this is the whole fault history it will admit to -->
+<details><summary>Alarm history</summary><table id="alarmlog"></table></details>
 <details><summary>Raw registers (debug)</summary><table id="raw"></table></details>
 <footer>Read-only · Modbus TCP + getvar.csv + onboard datalogger · refreshes every 5 s</footer>
 
 <script src="/app.js"></script>
+<!-- three.js module resolution for the 3D unit: the postprocessing addons under
+     /three/addons/ (served from node_modules/three/examples/jsm by lib/routes.js)
+     do a bare `import ... from "three"`, so map that to the same vendored build
+     the model itself loads — one three instance, no CDN. Must precede the module. -->
+<script type="importmap">
+{ "imports": { "three": "/three.js", "three/addons/": "/three/addons/" } }
+</script>
 <!-- 3D unit model — ES module, loaded natively (no bundler); runs after app.js
      since modules are deferred, same order as when both were inline -->
 <script type="module" src="/unit3d.js"></script>

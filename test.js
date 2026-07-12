@@ -23,9 +23,10 @@ for (const anchor of ["glyIn", "comp2", "/app.js", "/unit3d.js", "Raw registers"
 // the page scripts must at least parse — a syntax error kills the whole page
 // silently (every function, including tick(), just never exists). vm.Script
 // compiles the source without running it; it's classic-only, so the 3D
-// module's import line is stripped before compiling.
+// module's import lines (three + its postprocessing addons) are all stripped
+// before compiling.
 new (require("node:vm").Script)(APP);
-new (require("node:vm").Script)(UNIT3D.replace(/^import .*$/m, ""));
+new (require("node:vm").Script)(UNIT3D.replace(/^import .*$/gm, ""));
 
 // /api/log param whitelist: controller date format only, nothing else passes through
 assert.ok(TSTAMP.test("2026-07-11T00:00:00"));

@@ -60,15 +60,109 @@ async function tick() {
     pill("Flow A", w["Glycol flow A ok"], true, "Flow switch, circuit A — red means no flow") +
     pill("Flow B", w["Glycol flow B ok"], true, "Flow switch, circuit B — red means no flow");
 
-  $("hours").innerHTML = `<span>Runtime</span>` +
-    `<span>Comp A <b>${d.regs[135]} h</b></span><span>Comp B <b>${d.regs[141]} h</b></span>` +
-    `<span>Fan A <b>${d.regs[158]} h</b></span><span>Pump 2 <b>${d.regs[131]} h</b></span>`;
+  safety(w, d.regs);
 
   $("raw").innerHTML =
     "<tr><th>reg</th><th>raw</th><th>÷10</th></tr>" +
     Object.entries(d.regs).filter(([, v]) => v !== 0)
       .map(([k, v]) => `<tr><td>${k}</td><td>${v}</td><td>${S(v)}</td></tr>`).join("");
 }
+// --- Safety column (left of the cabinet) ---
+// Everything here answers "is something wrong?", so the resting state is grey and
+// quiet: a leak sensor reading 0 % says nothing more than "sensor is alive". Colour
+// and detail appear only on a fault, which is why the alarm card is emitted at all
+// only when the controller reports one.
+let alarms = null; // latest /api/alarms payload; null until the first poll lands
+// Unmapped alarm vars fall through to their raw controller name — escape before
+// it reaches innerHTML rather than trust a string we don't control.
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+/**
+ * @param {Record<string, number>} w web vars from /api/all
+ * @param {Record<number, number>} regs raw registers (runtime hour counters)
+ */
+function safety(w, regs) {
+  const lel = (sfx) => {
+    const v = w["LEL " + sfx + " %"];
+    // a leak sensor is the one thing on this machine that can hurt someone — an
+    // unreadable sensor is itself a fault, so undefined reads amber, not grey
+    if (v == null) return `<div class="s"><span class="dot warn"></span>Gas ${sfx} <b>no reading</b></div>`;
+    return `<div class="s"><span class="dot ${v ? "bad" : "ok"}"></span>Gas ${sfx}` +
+           (v ? ` <b>${v.toFixed(1)}% LEL</b>` : "") + `</div>`;
+  };
+  const trip = (key, name, tip) => w[key]
+    ? `<div class="s" title="${tip}"><span class="dot bad"></span><b>${name} tripped</b></div>` : "";
+
+  const active = (alarms?.active ?? []).map((a) =>
+    `<div class="alarm"><span>${esc(a.name)}</span><span class="when">since ${when(a.since)}</span></div>`).join("");
+  // no active alarm → show the last one instead: this unit trips high-glycol-temp
+  // often enough that "nothing right now" alone would hide a real pattern
+  const last = !active && alarms?.recent?.length
+    ? `<div class="last">Last fault<br><b>${esc(alarms.recent[0].name)}</b> · ${when(alarms.recent[0].at)}</div>` : "";
+
+  // runtime hours, paired A/B per device — wear on each half of the machine, and
+  // the gap between a pair is the interesting bit (lead/lag imbalance)
+  const hrs = (name, a, b) =>
+    `<div class="hr"><span>${name}</span><b>${regs[a] ?? "–"}</b><b>${regs[b] ?? "–"}</b></div>`;
+
+  $("safety").innerHTML =
+    `<h3>Safety</h3>` +
+    lel("A") + lel("B") +
+    trip("HP pressostat trip", "HP switch",
+         "High-pressure pressostat opened — refrigerant pressure exceeded the mechanical limit") +
+    trip("LP pressostat trip", "LP switch",
+         "Low-pressure pressostat opened — refrigerant pressure fell below the mechanical limit") +
+    (active || last) +
+    `<h3 class="rt">Runtime <span>hours · A / B</span></h3>` +
+    hrs("Compressor", 135, 141) + hrs("Fan", 158, 160) + hrs("Pump", 129, 131);
+}
+
+// Alarm timestamps carry a "+00:00" the controller doesn't mean (its clock runs
+// site-local) — same quirk as the datalogger, so parse as local wall-clock.
+const at = (ts) => new Date(String(ts).slice(0, 19));
+const when = (ts) => {
+  const d = at(ts);
+  if (isNaN(+d)) return ts;
+  const days = Math.floor((Date.now() - +d) / 86400e3);
+  return days > 0 ? `${days} d ago` : d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+};
+const stamp = (ts) => {
+  const d = at(ts);
+  return isNaN(+d) ? ts : d.toLocaleString([], { month: "short", day: "numeric",
+                                                hour: "numeric", minute: "2-digit" });
+};
+// How long the fault stood — the useful part: a 6.9 h high-temp is a different
+// story from a 2 min one, and the log's Start/Stop pair is the only place it shows.
+// A Start with no Stop does NOT mean "still active": the controller's log holds
+// only ~50 events, so old faults routinely have their Stop truncated off the end.
+// Only an alarm the controller currently reports as active gets to say so.
+const lasted = (a) => {
+  if (!a.cleared) return alarms?.active?.some((x) => x.name === a.name) ? "still active" : "—";
+  const m = Math.round((+at(a.cleared) - +at(a.at)) / 60000);
+  if (!isFinite(m)) return "—";
+  return m < 1 ? "<1 min" : m < 90 ? m + " min" : (m / 60).toFixed(1) + " h";
+};
+
+// The full fault log, newest first (the controller keeps ~50 events).
+function drawAlarmLog() {
+  if (!alarms) return;
+  $("alarmlog").innerHTML = alarms.recent.length
+    ? "<tr><th>fault</th><th>started</th><th>lasted</th></tr>" +
+      alarms.recent.map((a) =>
+        `<tr><td>${esc(a.name)}</td><td>${stamp(a.at)}</td><td>${lasted(a)}</td></tr>`).join("")
+    : "<tr><td>no faults in the controller's log</td></tr>";
+}
+
+// Faults don't need 5 s resolution and cost two extra controller requests — poll slowly.
+(async function alarmLoop() {
+  try {
+    const a = await (await fetch("/api/alarms")).json();
+    if (!a.error) { alarms = a; drawAlarmLog(); }
+  } catch { /* leave the last known alarms up; tick()'s offline banner covers the outage */ }
+  setTimeout(alarmLoop, 60000);
+})();
+
 let lastGoodMs = 0; // last successful refresh, so "offline" can say how stale the data is
 const age = ms => { const s = Math.round(ms / 1000);
   return s < 90 ? s + " s" : s < 5400 ? Math.round(s / 60) + " min" : Math.round(s / 3600) + " h"; };
@@ -94,7 +188,8 @@ const tstr = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate()
 let histBackfilling = false; // true while the server backfill runs (X-Log-Loading header)
 
 async function loadHist(hours) {
-  // -> uPlot data [[unix ts], [in °F], [out °F], [circ A run], [circ B run]],
+  // -> uPlot data [[unix ts], [in °F], [out °F], [circ A run], [circ B run],
+  //    [cond A °F], [cond B °F]] (cond = saturation temp from discharge pressure),
   // or null on failure. Run series are strip y-values (fixed "run" scale) while
   // either of the circuit's compressors is on, null while off.
   // /api/log answers instantly from the server's rolling cache; X-Log-Loading
@@ -112,6 +207,7 @@ async function loadHist(hours) {
   const rows = text.trim().split(/\r?\n/); // controller CSV is CRLF
   const head = (rows.shift() || "").split(",").map(s => s.replace(/"/g, ""));
   const iT = head.indexOf("TIME"), iIn = head.indexOf("W_InTempUser"), iOut = head.indexOf("W_OutTempUser");
+  const iP1 = head.indexOf("DscgP_Circ1"), iP2 = head.indexOf("DscgP_Circ2");
   // each circuit has two compressor state columns; "running" = either is 1
   const iA1 = head.indexOf("Comp1Circ1_Dout.Val"), iA2 = head.indexOf("Comp2Circ1_On");
   const iB1 = head.indexOf("Comp1Circ2_Dout.Val"), iB2 = head.indexOf("Comp2Circ2_On");
@@ -120,7 +216,7 @@ async function loadHist(hours) {
   // which is indistinguishable from idle — say so instead of failing silently
   if ((iA1 < 0 && iA2 < 0) || (iB1 < 0 && iB2 < 0))
     console.warn("history: compressor column(s) missing from the log header — run strips will be empty");
-  const xs = [], ins = [], outs = [], as = [], bs = [];
+  const xs = [], ins = [], outs = [], as = [], bs = [], ca = [], cb = [];
   for (const line of rows) {
     const c = line.split(",");
     if (c.length < head.length) continue;
@@ -128,12 +224,30 @@ async function loadHist(hours) {
     if (!isFinite(t)) continue;
     if (xs.length && t - xs[xs.length - 1] > 900) {          // >15 min hole: break the lines
       xs.push(t - 1); ins.push(null); outs.push(null); as.push(null); bs.push(null);
+      ca.push(null); cb.push(null);
     }
     xs.push(t); ins.push(F(parseFloat(c[iIn]))); outs.push(F(parseFloat(c[iOut])));
     as.push(+c[iA1] || +c[iA2] ? 1.5 : null);                // strip heights on the "run" scale
     bs.push(+c[iB1] || +c[iB2] ? 0.5 : null);
+    ca.push(condF(parseFloat(c[iP1]))); cb.push(condF(parseFloat(c[iP2])));
   }
-  return [xs, ins, outs, as, bs];
+  return [xs, ins, outs, as, bs, ca, cb];
+}
+
+// Condensing temp isn't in the datalogger, but discharge pressure (bar abs) is,
+// and saturated refrigerant pressure maps 1:1 to temperature — that's exactly
+// how the controller computes the condensing temp it shows live. This is an
+// R290 (propane) unit (hence the PctLEL sensors); table is NIST propane
+// saturation, matches the controller's live reg-4/36 values within ~0.1 °F.
+const SAT = [[0, 4.745], [5, 5.51], [10, 6.36], [15, 7.30], [20, 8.36], [25, 9.52],
+  [30, 10.79], [35, 12.18], [40, 13.69], [45, 15.34], [50, 17.13], [55, 19.06], [60, 21.22]];
+function condF(bar) { // °C sat temp for propane at `bar` abs, returned in °F; null off-table
+  if (!isFinite(bar)) return null;
+  for (let i = 1; i < SAT.length; i++) {
+    const [t0, p0] = SAT[i - 1], [t1, p1] = SAT[i];
+    if (bar <= p1) return bar < p0 ? null : F(t0 + (t1 - t0) * (bar - p0) / (p1 - p0));
+  }
+  return null; // above 60 °C sat — not a real operating point, likely a bad sample
 }
 
 // Current cooling setpoint (Modbus reg 70, °F), set by tick(). Drawn as a flat
@@ -168,10 +282,16 @@ function drawHist(data) {
       { label: "In (return)",  stroke: v("--hist-in"), width: 2, value: degF },
       { label: "Out (supply)", stroke: v("--accent"),  width: 2, value: degF },
       strip("Comp A"), strip("Comp B"),
+      // condensing temps live ~90–130 °F, far above the glycol lines — their own
+      // right-hand scale keeps both readable instead of flattening the glycol detail
+      { label: "Cond A", stroke: v("--warn"), width: 1, scale: "cond", value: degF },
+      { label: "Cond B", stroke: v("--bad"),  width: 1, scale: "cond", value: degF },
       { label: "Setpoint", stroke: v("--mut"), width: 1, dash: [4, 4], value: degF },
     ],
     scales: { run: { range: [0, 15] } }, // strips occupy the bottom ~10%
-    axes: [axis, { ...axis, size: 46, values: (u, vs) => vs.map(x => x + "°") }],
+    axes: [axis, { ...axis, size: 46, values: (u, vs) => vs.map(x => x + "°") },
+      { ...axis, size: 46, scale: "cond", side: 1, grid: { show: false },
+        values: (u, vs) => vs.map(x => x + "°") }],
   }, [...data, data[0].map(() => histSetp)], el);
 }
 
