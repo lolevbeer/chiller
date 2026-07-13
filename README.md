@@ -301,7 +301,7 @@ unauthenticated and are intended for trusted or access-controlled networks.
 | `/api/alarms` | `{"active": [{name, since}], "recent": [{name, at, cleared}]}` |
 | `/api/log?start=…&stop=…` | Cached CSV slice; timestamps must be `YYYY-MM-DDThh:mm:ss` |
 | `/pgd/*` | Narrow reverse proxy to the controller's live HTML5 pGD interface |
-| `/app.js`, `/unit3d.js`, `/logo.svg` | Dashboard scripts and G&D seal artwork |
+| `/datetime.js`, `/app.js`, `/unit3d.js`, `/logo.svg` | Shared date/time formatter, dashboard scripts, and G&D seal artwork |
 | `/uplot.js`, `/uplot.css` | Locally served uPlot assets; no CDN |
 | `/three.js`, `/three.core.min.js`, `/three/addons/*` | Locally served three.js module and postprocessing dependencies |
 | `/reload` | Development-only server-sent event stream used by `npm run dev` |
@@ -368,6 +368,13 @@ The module folds events into named incidents. The controller retains only about
 50 events, so an old Start whose Stop has aged out is shown with unknown duration
 rather than incorrectly marked active. Timestamps include `+00:00`, but the
 controller clock actually runs in site-local time.
+
+Human-facing timestamps share `lib/datetime.js` across the dashboard and Slack.
+Absolute moments use `Jul 13, 2026 at 4:56 AM`; same-day ranges use
+`Jul 13, 2026 · 4:56–10:54 AM`; cross-day ranges repeat both dates; and elapsed
+times use at most two useful units, such as `6 hr 55 min`. Relative time may add
+context but does not replace the absolute timestamp. ISO timestamps remain only
+in machine-facing JSON, CSV, and controller query parameters.
 
 Observed faults include high glycol temperature, freeze protection for both
 circuits, compressor overload, phase monitor, low reservoir level, EEV driver
@@ -593,6 +600,8 @@ dashboard access.
 - `lib/webvars.js` contains `WEB_VARS` and `readWeb()`.
 - `lib/alarms.js` reads and folds the controller alarm log.
 - `lib/logcache.js` implements datalogger fetch, merge, persistence, and slices.
+- `lib/datetime.js` is the shared Node/browser formatter for human-facing dates,
+  time ranges, and durations.
 - `lib/slack.js` evaluates proactive alerts, queues webhook posts, and builds the
   daily summary.
 - `lib/slack_commands.js` implements read-only `/chiller` Socket Mode commands.

@@ -4,6 +4,7 @@ const assert = require("node:assert");
 const { scale, ROW, WEB_VARS, UNUSED_WEB_VARS, PAGE, TSTAMP, step, logInsert, logSlice } = require("./chiller_dashboard.js");
 const { post, flushPosts, initialDailyKey } = require("./lib/slack");
 const { commandResponse, trendFromCsv, alarmsText } = require("./lib/slack_commands");
+const dateTime = require("./lib/datetime");
 
 assert.strictEqual(scale(270), 27.0);
 assert.strictEqual(scale(65516), -2.0); // negative temp wraps correctly
@@ -21,9 +22,10 @@ assert.ok(!("Modbus_FB.ResLvl" in WEB_VARS));
 // the page's scripts live in public/ (served at /app.js and /unit3d.js)
 const APP = require("node:fs").readFileSync(require("node:path").join(__dirname, "public/app.js"), "utf8");
 const UNIT3D = require("node:fs").readFileSync(require("node:path").join(__dirname, "public/unit3d.js"), "utf8");
+const DATETIME = require("node:fs").readFileSync(require("node:path").join(__dirname, "lib/datetime.js"), "utf8");
 
 // "Raw registers" was an anchor here until the debug table was dropped from the page
-for (const anchor of ["glyIn", "comp2", "/app.js", "/unit3d.js"]) {
+for (const anchor of ["glyIn", "comp2", "/datetime.js", "/app.js", "/unit3d.js"]) {
   assert.ok(PAGE.includes(anchor), anchor);
 }
 
@@ -34,6 +36,22 @@ for (const anchor of ["glyIn", "comp2", "/app.js", "/unit3d.js"]) {
 // before compiling.
 new (require("node:vm").Script)(APP);
 new (require("node:vm").Script)(UNIT3D.replace(/^import .*$/gm, ""));
+new (require("node:vm").Script)(DATETIME);
+
+// Human-facing time has one shared contract in Node and the browser. Display
+// preserves controller wall time; offsets affect elapsed-time math only.
+assert.strictEqual(dateTime.moment("2026-07-13T04:56:38-07:00"), "Jul 13, 2026 at 4:56 AM");
+assert.strictEqual(dateTime.range("2026-07-13T04:56:38-07:00", "2026-07-13T10:54:48-07:00"),
+  "Jul 13, 2026 · 4:56–10:54 AM");
+assert.strictEqual(dateTime.range("2026-07-12T23:00:00-07:00", "2026-07-13T01:00:00-07:00"),
+  "Jul 12, 2026 at 11:00 PM → Jul 13, 2026 at 1:00 AM");
+assert.strictEqual(dateTime.elapsed("2026-07-11T03:26:41-07:00", "2026-07-11T03:29:05-07:00"), 144000);
+assert.strictEqual(dateTime.duration(24911000), "6 hr 55 min");
+assert.strictEqual(dateTime.clock(new Date(2026, 6, 13, 8, 5, 6), true), "8:05:06 AM");
+const browserContext = {};
+require("node:vm").runInNewContext(DATETIME, browserContext);
+assert.strictEqual(browserContext.ChillerDateTime.moment("2026-07-13T04:56:38-07:00"),
+  dateTime.moment("2026-07-13T04:56:38-07:00"));
 
 // /api/log param whitelist: controller date format only, nothing else passes through
 assert.ok(TSTAMP.test("2026-07-11T00:00:00"));
@@ -66,7 +84,8 @@ const rep = (n, s) => Array(n).fill(s);
 const alarmed = { ...OK, alarms: { active: [{ name: "High glycol temp", since: "2026-07-12T09:00:00" }] } };
 const [p1, p2, p3] = seq(alarmed, alarmed, OK);
 assert.strictEqual(p1.length, 1);
-assert.ok(p1[0].includes("High glycol temp") && p1[0].includes("2026-07-12T09:00:00"));
+assert.ok(p1[0].includes("High glycol temp") && p1[0].includes("Jul 12, 2026 at 9:00 AM"));
+assert.ok(!p1[0].includes("2026-07-12T"));
 assert.deepStrictEqual(p2, []); // still standing — no repeat. This is the deduplication.
 assert.ok(p3[0].includes("High glycol temp recovered") && p3[0].includes("lasted 2 min"));
 
@@ -177,7 +196,7 @@ for (const anchor of ["/uplot.js", "ranges"]) {
 for (const anchor of ["/api/all", "/api/log", "W_InTempUser", "W_OutTempUser",
                       // register names keep the controller's spelling; UI labels are spelled out
                       "Comp1Circ1_Dout.Val", "Comp2Circ2_On", "Compressor B",
-                      "X-Log-Loading", "unit3d"]) {
+                      "X-Log-Loading", "ChillerDateTime", "unit3d"]) {
   assert.ok(APP.includes(anchor), anchor);
 }
 for (const anchor of ["/three.js", "unit3d", "chipAnchors"]) {
