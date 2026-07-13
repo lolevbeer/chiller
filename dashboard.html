@@ -6,7 +6,7 @@
 <title>G&amp;D 7x7H</title>
 <!-- favicon: the MGR mark. A favicon has no page to inherit currentColor from, so
      the fill is explicit — dark on a light tab bar, light on a dark one. -->
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><style>path{fill:%2308090c}.s{fill:none;stroke:%2308090c}@media(prefers-color-scheme:dark){path{fill:%23e2e4ea}.s{stroke:%23e2e4ea}}</style><path fill-rule='evenodd' d='M4.5 8.3C4.5 5.1 7 2.7 10.2 2.7H13.8C17 2.7 19.5 5.1 19.5 8.3V13.6L13.1 20.6C12.5 21.25 11.5 21.25 10.9 20.6L4.5 13.6V8.3ZM12 6.7A2.1 2.1 0 1 0 12 10.9A2.1 2.1 0 1 0 12 6.7Z'/><path class='s' d='M5.2 14.5V20.3M18.8 14.5V20.3' stroke-width='2' stroke-linecap='round'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 21 25'><style>path{fill:%2308090c}@media(prefers-color-scheme:dark){path{fill:%23e2e4ea}}</style><path fill-rule='evenodd' d='M12.4112486,0 C16.6779153,0 20.0000231,2.8 20.0000231,7.06666667 C20.017005,13.6557983 20.0198353,18.9669094 20.008514,23 C20.0000231,25.0072296 17.0000231,25.0072296 17.0000231,23 C17.0201919,19.0776611 17.0201919,17.1666611 17.0000231,17.267 L11.4666897,22.22546 C11.0845456,22.6394495 10.5807063,22.8556844 10.0714346,22.8741647 C9.514571,22.894372 8.95121225,22.6781371 8.53335641,22.22546 L3.00002308,17.267 L3.00002308,23 C3.00002308,25.0460881 0,25.0460881 0,23 L0,7.06666667 C0,2.8 3.32065968,0 7.58732634,0 L12.4112486,0 Z M7.20002308,10.7333333 C7.20002308,12.2797306 8.45362578,13.5333333 10.0000231,13.5333333 C11.5464204,13.5333333 12.8000231,12.2797306 12.8000231,10.7333333 C12.8000231,9.18693603 11.5464204,7.93333333 10.0000231,7.93333333 C8.45362578,7.93333333 7.20002308,9.18693603 7.20002308,10.7333333 Z'/></svg>">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <link href="/uplot.css" rel="stylesheet">
@@ -100,17 +100,26 @@ h2 .cst { color: var(--dim); font-weight: 400; }
 .row .v i { color: var(--dim); font-style: normal; font-weight: 400; }
 .bar { width: 72px; height: 3px; border-radius: 2px; background: var(--line); display: inline-block; vertical-align: middle; margin-right: 8px; }
 .bar i { display: block; height: 100%; border-radius: 2px; background: var(--mut); transition: width .6s; }
-/* --- Safety column: pinned left of the cabinet, the things that mean "stop and
-   look" — refrigerant leak (this is a propane unit), the mechanical pressure
-   switches, and whatever the controller's alarm log holds. Quiet grey when all
-   is well; colour appears only when something is wrong. --- */
-.scene .safety { position: absolute; left: 24px; top: 50%; transform: translateY(-50%); z-index: 1;
-  display: flex; flex-direction: column; gap: 9px; align-items: flex-start;
-  max-width: 215px; font-size: 12px; }
-.scene.flat .safety { position: static; transform: none; max-width: none; }
+/* --- Safety column: a left rail beside the history chart — glycol setpoint/supply,
+   the things that mean "stop and look" (refrigerant leak — this is a propane unit,
+   the mechanical pressure switches, whatever the controller's alarm log holds), then
+   runtime. Quiet grey when all is well; colour appears only when something is wrong. --- */
+.safety { display: flex; flex-direction: column; gap: 9px; align-items: flex-start;
+  font-size: 12px; }
+/* the rail sits left of the chart; it collapses above it on a narrow window */
+#hist { display: grid; grid-template-columns: 215px minmax(0, 1fr); gap: 24px; align-items: start; }
+#hist h2 { grid-column: 2; }
+@media (max-width: 760px) { #hist { grid-template-columns: minmax(0, 1fr); } #hist h2 { grid-column: 1; } }
 .safety h3 { font-size: 10px; letter-spacing: .09em; text-transform: uppercase;
   color: var(--dim); font-weight: 500; }
 .safety .s { display: flex; align-items: center; gap: 7px; color: var(--mut); }
+/* glycol setpoint / supply pressure: label left, value right (they were chip rows before) */
+/* align-self: stretch — the column is align-items:flex-start, so without it the row
+   shrinks to its content and space-between has no room to work with */
+/* a touch larger than the safety/runtime rows — these are the numbers you look at first */
+.safety .g { display: flex; justify-content: space-between; align-self: stretch;
+  gap: 16px; color: var(--mut); font-size: 14px; }
+.safety .g b { color: var(--ink); font-weight: 500; font-size: 16px; letter-spacing: -.01em; }
 .safety .s b { color: var(--ink); font-weight: 500; }
 /* the alarm card is absent entirely when nothing is wrong, so its presence IS the signal */
 .safety .alarm { border-left: 2px solid var(--bad); padding: 4px 0 4px 9px; color: var(--bad);
@@ -136,9 +145,6 @@ h2 .cst { color: var(--dim); font-weight: 400; }
   transition-property: background-color, color; transition-duration: 150ms; }
 #ranges button:hover { color: var(--ink); }
 #ranges button.on { color: var(--ink); background: var(--line); }
-#histpct { margin-left: 10px; font-size: 12px; font-weight: 400; color: var(--dim); }
-#histpct:not(:empty) { animation: histpulse 1.6s ease-in-out infinite; } /* indefinite: pulse while backfilling */
-@keyframes histpulse { 50% { opacity: .35; } }
 #chart { margin-top: 4px; min-height: 260px; }
 #chart .msg { color: var(--dim); font-size: 13px; padding: 90px 0; text-align: center; }
 /* uPlot's legend is a <table> of stroke swatches by default, which reads as a form.
@@ -190,9 +196,8 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
 <body>
 <header>
   <!-- MGR mark (from ~/Repos/sarene-sales/index.html), inlined with currentColor so it follows the theme -->
-  <svg class="logo" viewBox="0 0 24 24" aria-label="MGR">
-    <path fill-rule="evenodd" fill="currentColor" d="M4.5 8.3C4.5 5.1 7 2.7 10.2 2.7H13.8C17 2.7 19.5 5.1 19.5 8.3V13.6L13.1 20.6C12.5 21.25 11.5 21.25 10.9 20.6L4.5 13.6V8.3ZM12 6.7A2.1 2.1 0 1 0 12 10.9A2.1 2.1 0 1 0 12 6.7Z"/>
-    <path d="M5.2 14.5V20.3M18.8 14.5V20.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  <svg class="logo" viewBox="0 0 21 25" aria-label="MGR">
+    <path fill-rule="evenodd" fill="currentColor" d="M12.4112486,0 C16.6779153,0 20.0000231,2.8 20.0000231,7.06666667 C20.017005,13.6557983 20.0198353,18.9669094 20.008514,23 C20.0000231,25.0072296 17.0000231,25.0072296 17.0000231,23 C17.0201919,19.0776611 17.0201919,17.1666611 17.0000231,17.267 L11.4666897,22.22546 C11.0845456,22.6394495 10.5807063,22.8556844 10.0714346,22.8741647 C9.514571,22.894372 8.95121225,22.6781371 8.53335641,22.22546 L3.00002308,17.267 L3.00002308,23 C3.00002308,25.0460881 0,25.0460881 0,23 L0,7.06666667 C0,2.8 3.32065968,0 7.58732634,0 L12.4112486,0 Z M7.20002308,10.7333333 C7.20002308,12.2797306 8.45362578,13.5333333 10.0000231,13.5333333 C11.5464204,13.5333333 12.8000231,12.2797306 12.8000231,10.7333333 C12.8000231,9.18693603 11.5464204,7.93333333 10.0000231,7.93333333 C8.45362578,7.93333333 7.20002308,9.18693603 7.20002308,10.7333333 Z"/>
   </svg>
   <!-- markup order is site (Lolev) then unit (G&D); CSS grid places the unit in the
        centre column and the site hard right (see .site-id / .gd-id) -->
@@ -221,16 +226,27 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
      compressor, high side + fan on each condenser zone (back), reservoir at
      the tank, pump/flow pills and runtime along the bottom of the scene.
      tick() fills them by id exactly as it did when they were side panels. -->
+<section id="hist">
+  <!-- no title: the chart speaks for itself. The h2 stays as the header row that
+       carries the range buttons. -->
+  <h2><span id="ranges">
+    <button data-h="6" class="on">6 h</button>
+    <button data-h="24">24 h</button>
+    <button data-h="168">7 d</button>
+  </span></h2>
+  <!-- left rail: glycol setpoint/supply, leak + pressure switches + alarms, runtime hours
+       (filled by tick/alarmLoop in app.js). It used to be pinned beside the 3D cabinet. -->
+  <div class="safety" id="safety"></div>
+  <div id="chart"></div>
+</section>
+
 <section class="hero-wrap">
   <div class="scene flat"><!-- .flat = no-3D fallback layout; the module removes it once WebGL is live -->
     <div class="chip" id="chipOut">
       <b><span class="t out" id="glyOut" title="Chilled glycol supply — amber above 30 °F, red above 40 °F (same thresholds as the Slack reports)">–</span><span class="u">°F out</span></b>
-      <div class="row"><span class="k" title="Target supply temperature (CoolSetP)">setpoint</span><span class="v" id="setp">–</span></div>
-      <div class="row"><span class="k">supply</span><span class="v" id="supP">–</span></div>
     </div>
     <div class="chip" id="chipIn">
       <b><span class="t in" id="glyIn" title="Warm glycol returning from the process">–</span><span class="u">°F in</span></b>
-      <div class="row"><span class="k" title="Return minus supply — how much heat the chiller is removing right now">ΔT</span><span class="v" id="dt">–</span></div>
     </div>
     <div class="chip" id="chipTop">
       <div class="row"><span class="k" title="Power request — % of capacity the controller is calling for">cooling demand</span><span class="v" id="pwr">–</span></div>
@@ -268,19 +284,8 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
       <div class="row"><span class="k">condensing</span><span class="v"><span id="condT2">–</span> <i>°F</i></span></div>
       <div class="row"><span class="k">fan</span><span class="v"><span class="bar"><i id="fanB2"></i></span><span id="fan2">–</span></span></div>
     </div>
-    <!-- left column: leak sensors, pressure switches, alarms, then runtime hours (filled by tick/alarmLoop) -->
-    <div class="safety" id="safety"></div>
     <div class="strips"><div class="pills" id="pills"></div></div>
   </div>
-</section>
-
-<section id="hist">
-  <h2>History<span id="histpct"></span><span id="ranges">
-    <button data-h="6" class="on">6 h</button>
-    <button data-h="24">24 h</button>
-    <button data-h="168">7 d</button>
-  </span></h2>
-  <div id="chart"></div>
 </section>
 
 <!-- the controller keeps ~50 events; this is the whole fault history it will admit to -->

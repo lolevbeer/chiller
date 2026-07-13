@@ -162,21 +162,21 @@ for (const x of [-117.8, 117.8]) for (const z of [-59.3, 59.3]) box(6, 159, 6, x
 // The separator overlaps the door bezels in x (rails at x 5…9, bezels at 5…13),
 // so it MUST clear them in z or the two solids interpenetrate and z-fight. The
 // bezels' front face is at z 61.5; every separator part therefore sits entirely
-// in front of it (rails: 3 deep at 63.2 → z 61.7…64.7 — no shared plane, no
-// overlap), which also gives the raised-divider look.
-const SEP_Z = 63.2;
-for (const x of [-7, 7]) box(4, 155, 3, x, 4.5, SEP_Z, trim); // the two side rails
+// in front of it (0.4 deep at 61.8 → z 61.6…62.0 — no shared plane, no overlap).
+// Nearly flush on purpose: 0.5 proud of the doors, just enough to read as a divider.
+const SEP_Z = 61.8;
+for (const x of [-7, 7]) box(4, 155, .4, x, 4.5, SEP_Z, trim); // the two side rails
 { // the channel is open (louvered) only where the doors have slats; above the top
   // blade and below the bottom one it's solid, like the doors' plain top band and
   // bottom margin — an open gap there would look like a hole in the separator.
   const TOP = 82, BOT = -73;                         // the column's extent
   const hi = SLAT_Y0 + SLAT_T / 2;                   // top edge of the topmost blade
   const lo = -67 - SLAT_T / 2;                       // bottom edge of the lowest one
-  box(10, TOP - hi, 3.4, 0, (TOP + hi) / 2, SEP_Z + .2, trim); // solid above the ladder…
-  box(10, lo - BOT, 3.4, 0, (lo + BOT) / 2, SEP_Z + .2, trim); // …and below it
+  box(10, TOP - hi, .4, 0, (TOP + hi) / 2, SEP_Z, trim); // solid above the ladder…
+  box(10, lo - BOT, .4, 0, (lo + BOT) / 2, SEP_Z, trim); // …and below it
 }
 for (let y = SLAT_Y0; y >= -67; y -= SLAT_PITCH) {   // the blades, bridging the open channel
-  const b = box(10, SLAT_T, 3.4, 0, y, SEP_Z, trim); // proud of the white slats behind them
+  const b = box(10, SLAT_T, .4, 0, y, SEP_Z, trim); // proud of the white slats behind them
   b.rotation.x = SLAT_TILT; // match the doors, or the ladder reads as flat rungs
 }
 // flat door bezels flanking each louver stack (photo: white margins before the louvers)
@@ -250,10 +250,10 @@ for (const y of [-14, -37]) { const p = new THREE.Mesh(portGeo, trim);
 // glycol reservoir: a tank filling the left third (facing the front) behind the
 // left door — same end as its supply/return stubs — full height from the base
 // rail to the top skin and full depth to the back panel (the blank rear third),
-// plus the filler cap poking through the top skin (front-view drawing, top-left)
+// plus the filler cap poking through the top skin at the back-left corner of the tank
 box(70, 154, 110, -75, 4, -2, M(0x525a64, .55, .45));
 const cap = new THREE.Mesh(new THREE.CylinderGeometry(5, 5, 6, 12), trim);
-cap.position.set(-105, 87, 30); unit.add(cap);
+cap.position.set(-100, 87, -45); unit.add(cap);
 
 // condenser zones on the BACK, hugging the control-box end (screen-left when
 // facing the back, per the rear-view drawing — blank reservoir third at the glycol
@@ -294,15 +294,15 @@ const fans = [], bladeGeo = new THREE.RingGeometry(8, 30, 12, 1, -.55, 1.1),
 // after every render. tick() fills the chips' inner ids like any DOM node —
 // no data flows through here, only positions.
 const chipAnchors = [ // [chip id, x, y, z (model units)]
-  ["chipOut", -168, -2, 15],  // supply stub — out temp, setpoint, supply psi
-  ["chipIn",  -168, -54, 15], // return stub — in temp, ΔT
-  ["chipTop",  30, 108, 0],   // over the top skin — cooling demand
-  ["chipRes", -105, 106, 30], // reservoir filler cap — reservoir temp
-  // One chip per circuit now (low + high side merged — see dashboard.html), so each
-  // is anchored at its own compressor and carries the whole loop. They're taller than
-  // the old low-side-only chips, hence pushed further out in x and spread in y.
-  ["chipA",   168, 50, 42],   // compressor A — the whole circuit A loop
-  ["chipB",   168, -70, 42],  // compressor B — the whole circuit B loop
+  ["chipOut", -142, -6, 15],  // supply stub (−124, −14) — out temp, setpoint, supply psi
+  ["chipIn",  -142, -46, 15], // return stub (−124, −37) — in temp, ΔT
+  ["chipTop",  30, 96, 0],    // over the top skin — cooling demand
+  ["chipRes", -100, 96, -45], // reservoir filler cap — reservoir temp
+  // One chip per circuit (low + high side merged — see dashboard.html), each anchored
+  // at its own compressor (60, 20 / 60, −44) and carrying the whole loop. Offset out in
+  // x and spread in y just far enough that the two tall chips clear the cabinet.
+  ["chipA",   134, 40, 42],   // compressor A — the whole circuit A loop
+  ["chipB",   134, -58, 42],  // compressor B — the whole circuit B loop
 ].map(([id, x, y, z]) => { const o = new THREE.Object3D();
   o.position.set(x, y, z); unit.add(o); return [document.getElementById(id), o]; });
 const wp = new THREE.Vector3();
