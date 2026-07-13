@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>G&amp;D 7x7H</title>
+<title>Temperature Monitor</title>
 <!-- favicon: the MGR mark. A favicon has no page to inherit currentColor from, so
      the fill is explicit — dark on a light tab bar, light on a dark one. -->
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 21 25'><style>path{fill:%2308090c}@media(prefers-color-scheme:dark){path{fill:%23e2e4ea}}</style><path fill-rule='evenodd' d='M12.4112486,0 C16.6779153,0 20.0000231,2.8 20.0000231,7.06666667 C20.017005,13.6557983 20.0198353,18.9669094 20.008514,23 C20.0000231,25.0072296 17.0000231,25.0072296 17.0000231,23 C17.0201919,19.0776611 17.0201919,17.1666611 17.0000231,17.267 L11.4666897,22.22546 C11.0845456,22.6394495 10.5807063,22.8556844 10.0714346,22.8741647 C9.514571,22.894372 8.95121225,22.6781371 8.53335641,22.22546 L3.00002308,17.267 L3.00002308,23 C3.00002308,25.0460881 0,25.0460881 0,23 L0,7.06666667 C0,2.8 3.32065968,0 7.58732634,0 L12.4112486,0 Z M7.20002308,10.7333333 C7.20002308,12.2797306 8.45362578,13.5333333 10.0000231,13.5333333 C11.5464204,13.5333333 12.8000231,12.2797306 12.8000231,10.7333333 C12.8000231,9.18693603 11.5464204,7.93333333 10.0000231,7.93333333 C8.45362578,7.93333333 7.20002308,9.18693603 7.20002308,10.7333333 Z'/></svg>">
@@ -36,22 +36,18 @@ section { padding: 20px 0; transition: opacity .3s; }
 /* stale data reads as stale: everything below the header dims while offline */
 body.offline section, body.offline details { opacity: .45; }
 /* full-bleed: same 100vw breakout the .scene uses. The breakout escapes the
-   body's horizontal padding, so the header sets its own — a tighter inset than
-   the body gutter, to keep the marks near the viewport edges. */
-/* 1fr auto 1fr: the brand cluster sits in the middle column, so it centers on the
-   header itself — not on the space left over beside the MGR mark */
-header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
-  width: 100vw; margin-left: calc(50% - 50vw); padding: 0 24px 20px; }
-header .logo { height: 52px; width: auto; justify-self: start; color: var(--ink); }
+   body's horizontal padding, so the header sets its own generous inset. */
+header { display: flex; align-items: center; gap: 14px;
+  width: 100vw; margin-left: calc(50% - 50vw); padding: 20px 32px 28px; }
+.page-title { font-size: 20px; font-weight: 600; letter-spacing: -.02em; }
+header .logo { height: 52px; width: auto; flex: none; color: var(--ink); }
 h1 { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
 /* unit identity: the vendor seal + model name, sitting in the header to the
    right of the MGR mark. The seal ships black-on-transparent (gd_seal.svg,
    served at /logo.svg), so invert it for the dark page — which also matches the
    white-on-black door badge on the real cabinet. */
-/* explicit columns, so the markup can keep the site (Lolev) before the unit (G&D)
-   while the unit renders centred and the site sits hard right */
-.gd-id { grid-column: 2; }
-.site-id { grid-column: 3; justify-self: end; }
+.gd-id { justify-content: center; margin-bottom: 20px; }
+.site-id { margin-left: auto; }
 .unit-id { display: flex; align-items: center; gap: 12px; }
 .unit-id .meta { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 2px; }
 .unit-id .lolev { height: 44px; width: auto; flex: none; color: var(--ink); }
@@ -108,8 +104,9 @@ h2 .cst { color: var(--dim); font-weight: 400; }
   font-size: 12px; }
 /* the rail sits left of the chart; it collapses above it on a narrow window */
 #hist { display: grid; grid-template-columns: 215px minmax(0, 1fr); gap: 24px; align-items: start; }
-#hist h2 { grid-column: 2; }
-@media (max-width: 760px) { #hist { grid-template-columns: minmax(0, 1fr); } #hist h2 { grid-column: 1; } }
+#hist .safety { grid-column: 1; grid-row: 1 / span 2; }
+#hist h2 { grid-column: 2; grid-row: 1; }
+#chart { grid-column: 2; grid-row: 2; }
 .safety h3 { font-size: 10px; letter-spacing: .09em; text-transform: uppercase;
   color: var(--dim); font-weight: 500; }
 .safety .s { display: flex; align-items: center; gap: 7px; color: var(--mut); }
@@ -181,6 +178,54 @@ h2 .cst { color: var(--dim); font-weight: 400; }
   cursor: default; touch-action: auto; }
 .scene.flat .chip { position: static; transform: none; }
 .scene.flat .strips { position: static; width: 100%; margin-top: 6px; }
+/* On phones the 3D model gets its own landscape viewport and the live cards
+   reflow below it. Keeping the cards pinned to projected model coordinates in
+   a ~360 px viewport makes them overlap and leaves too little room for the
+   canvas; this preserves every reading and still gives the unit a useful drag
+   surface. The desktop/tablet presentation remains spatially pinned. */
+@media (max-width: 760px) {
+  body { padding: 12px 16px 48px; }
+  section { padding: 16px 0; }
+  header { gap: 10px; padding: 16px 16px 22px; }
+  header .logo { height: 40px; }
+  .page-title { font-size: 18px; white-space: nowrap; }
+  .site-id { gap: 8px; }
+  .unit-id .lolev { height: 36px; }
+  .gd-id { margin-bottom: 12px; }
+  #hist { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  #hist .safety { grid-column: 1; grid-row: 1; }
+  #hist h2 { grid-column: 1; grid-row: 2; }
+  #chart { grid-column: 1; grid-row: 3; }
+  #chart { min-width: 0; }
+  #ranges button { padding-inline: 10px; }
+  .hero-wrap { padding-inline: 0; }
+  .scene:not(.flat) { height: auto; display: grid;
+    width: 100%; margin-left: 0;
+    grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;
+    cursor: default; touch-action: auto; }
+  .scene:not(.flat) canvas { grid-column: 1 / -1; grid-row: 1; width: 100% !important;
+    cursor: grab; touch-action: pan-y; }
+  .scene:not(.flat) .chip { position: static; transform: none; min-width: 0;
+    margin: 0; padding-inline: 0; white-space: normal;
+    background: transparent; border: 0; border-radius: 0; }
+  .scene:not(.flat) #chipOut { grid-column: 1; grid-row: 2; }
+  .scene:not(.flat) #chipIn { grid-column: 2; grid-row: 2; }
+  .scene:not(.flat) #chipTop { grid-column: 1; grid-row: 3; }
+  .scene:not(.flat) #chipRes { grid-column: 2; grid-row: 3; }
+  .scene:not(.flat) #chipA { grid-column: 1 / -1; grid-row: 4; }
+  .scene:not(.flat) #chipB { grid-column: 1 / -1; grid-row: 5; }
+  .scene:not(.flat) .strips { position: static; grid-column: 1 / -1; grid-row: 6;
+    width: auto; margin: 8px 0 0; }
+  .scene .strips { gap: 12px; }
+  .pills { gap: 10px 16px; justify-content: center; }
+  details { overflow-x: auto; }
+}
+@media (max-width: 480px) {
+  .site { display: none; }
+  .chip { padding: 6px 8px; }
+  .chip .row { gap: 10px; }
+  .u-legend tr { padding-inline: 7px; }
+}
 details { padding-top: 18px; color: var(--dim); font-size: 13px; }
 /* the alert triangle IS the disclosure marker, so drop the default one */
 summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 7px; }
@@ -190,6 +235,10 @@ summary .info { color: var(--mut); flex: none; }
 summary .info svg { display: block; width: 14px; height: 14px; }
 details table { border-collapse: collapse; margin-top: 10px; font-size: 12px; }
 details td, details th { padding: 3px 10px; text-align: left; color: var(--mut); }
+.pgd-panel { max-width: 820px; margin-inline: auto; }
+.pgd-panel h2 { margin-bottom: 12px; }
+.pgd-frame { display: block; width: 100%; aspect-ratio: 820 / 450; border: 0;
+  background: transparent; }
 footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
 </style>
 </head>
@@ -199,8 +248,7 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
   <svg class="logo" viewBox="0 0 21 25" aria-label="MGR">
     <path fill-rule="evenodd" fill="currentColor" d="M12.4112486,0 C16.6779153,0 20.0000231,2.8 20.0000231,7.06666667 C20.017005,13.6557983 20.0198353,18.9669094 20.008514,23 C20.0000231,25.0072296 17.0000231,25.0072296 17.0000231,23 C17.0201919,19.0776611 17.0201919,17.1666611 17.0000231,17.267 L11.4666897,22.22546 C11.0845456,22.6394495 10.5807063,22.8556844 10.0714346,22.8741647 C9.514571,22.894372 8.95121225,22.6781371 8.53335641,22.22546 L3.00002308,17.267 L3.00002308,23 C3.00002308,25.0460881 0,25.0460881 0,23 L0,7.06666667 C0,2.8 3.32065968,0 7.58732634,0 L12.4112486,0 Z M7.20002308,10.7333333 C7.20002308,12.2797306 8.45362578,13.5333333 10.0000231,13.5333333 C11.5464204,13.5333333 12.8000231,12.2797306 12.8000231,10.7333333 C12.8000231,9.18693603 11.5464204,7.93333333 10.0000231,7.93333333 C8.45362578,7.93333333 7.20002308,9.18693603 7.20002308,10.7333333 Z"/>
   </svg>
-  <!-- markup order is site (Lolev) then unit (G&D); CSS grid places the unit in the
-       centre column and the site hard right (see .site-id / .gd-id) -->
+  <div class="page-title">Temperature Monitor</div>
   <div class="unit-id site-id">
       <!-- Lolev mark (from ~/Repos/lolev-manager2/src/graphics/Logo.tsx), inlined with currentColor so it follows the theme -->
       <svg class="lolev" viewBox="0 0 485 530" aria-label="Lolev Beer">
@@ -211,15 +259,16 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
       </svg>
     <span class="site">Lolev Beer</span>
   </div>
-  <div class="unit-id gd-id" title="Proportions from the install drawing (93.9 × 48.2 × 66.4). Fans spin at their live reported speed. Drag to rotate — the high side lives on the back.">
-    <img class="seal" src="/logo.svg" alt="G&amp;D">
-    <div class="meta">
-      <h1>G&amp;D Chillers • 7x7H</h1>
-      <span id="net"></span>
-      <span id="stat"><span class="dot" id="statdot"></span><span id="stattxt">connecting</span></span>
-    </div>
-  </div>
 </header>
+
+<div class="unit-id gd-id" title="Proportions from the install drawing (93.9 × 48.2 × 66.4). Fans spin at their live reported speed. Drag to rotate — the high side lives on the back.">
+  <img class="seal" src="/logo.svg" alt="G&amp;D">
+  <div class="meta">
+    <h1>G&amp;D Chillers • 7x7H</h1>
+    <span id="net"></span>
+    <span id="stat"><span class="dot" id="statdot"></span><span id="stattxt">connecting</span></span>
+  </div>
+</div>
 
 <!-- All live readings are chips pinned to the 3D unit (see chipAnchors in the
      module script): glycol temperatures at the supply/return stubs, each full
@@ -227,6 +276,10 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
      demand over the top. Pump/flow status stays along the bottom of the scene.
      tick() fills them by id exactly as it did when they were side panels. -->
 <section id="hist">
+  <!-- Glycol, safety, and runtime come first in reading order. On wide screens
+       this block forms the chart's left rail; on mobile it breaks above the
+       range tabs and chart. -->
+  <div class="safety" id="safety"></div>
   <!-- no title: the chart speaks for itself. The h2 stays as the header row that
        carries the range buttons. -->
   <h2><span id="ranges">
@@ -234,9 +287,6 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
     <button data-h="24">24 h</button>
     <button data-h="168">7 d</button>
   </span></h2>
-  <!-- left rail: glycol setpoint/supply, leak + pressure switches + alarms, runtime hours
-       (filled by tick/alarmLoop in app.js). It used to be pinned beside the 3D cabinet. -->
-  <div class="safety" id="safety"></div>
   <div id="chart"></div>
 </section>
 
@@ -286,6 +336,12 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
     </div>
     <div class="strips"><div class="pills" id="pills"></div></div>
   </div>
+</section>
+
+<section class="pgd-panel">
+  <h2>Controller display <span class="cst">pGD · live controls</span></h2>
+  <iframe class="pgd-frame" src="/pgd/webpgd.htm"
+    title="Carel pGD controller display" loading="lazy"></iframe>
 </section>
 
 <!-- the controller keeps ~50 events; this is the whole fault history it will admit to -->

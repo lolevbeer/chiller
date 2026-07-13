@@ -75,7 +75,11 @@ composer.addPass(new OutputPass()); // the composer bypasses the renderer's own 
 // frame-filling zoom: pull in until the unit spans ~45 % of the scene width
 // (10.7/aspect), floored at 4.4 where the cabinet's apparent height would
 // clip instead (~207 units when pitched to the drag limit)
-const fit = () => { const w = host.clientWidth, h = host.clientHeight;
+const compactView = matchMedia("(max-width: 760px)");
+const fit = () => { const w = host.clientWidth,
+  // On compact screens the host also contains the reflowed cards, so its total
+  // height is not the canvas height. Give the model a stable landscape viewport.
+  h = compactView.matches ? THREE.MathUtils.clamp(w * .58, 220, 420) : host.clientHeight;
   renderer.setSize(w, h); composer.setSize(w, h); camera.aspect = w / h;
   camera.position.z = Math.max(4.4, 10.7 / camera.aspect);
   camera.updateProjectionMatrix(); };
@@ -305,6 +309,12 @@ const chipAnchors = [ // [chip id, x, y, z (model units)]
 const wp = new THREE.Vector3();
 const placeChips = () => {
   const w = host.clientWidth, h = host.clientHeight;
+  if (compactView.matches) { // CSS lays the cards out beneath the canvas on phones.
+    for (const [el] of chipAnchors) {
+      el.classList.remove("far"); el.style.left = ""; el.style.top = "";
+    }
+    return;
+  }
   for (const [el, o] of chipAnchors) {
     o.getWorldPosition(wp);
     el.classList.toggle("far", wp.z < -.35); // behind the cabinet's midplane = facing away
@@ -336,6 +346,7 @@ const DRAG = THREE.MathUtils.degToRad(.5); // rad per px of pointer travel
 const PITCH_MIN = THREE.MathUtils.degToRad(-30), PITCH_MAX = THREE.MathUtils.degToRad(80);
 let auto = false, grab = null; // loads front-facing (yaw 0), tilted by the pitch group only
 host.addEventListener("pointerdown", e => {
+  if (compactView.matches && e.target !== renderer.domElement) return;
   auto = false;
   grab = { x: e.clientX, y: e.clientY }; host.setPointerCapture(e.pointerId);
 });

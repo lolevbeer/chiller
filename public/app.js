@@ -40,7 +40,7 @@ async function tick() {
     const comp = w["Compressor " + sfx + " on"];
     $("comp" + n).className = "dot" + (comp ? " ok" : "");
     unit3d.comps[+n - 1] = !!comp; // 3D unit: compressor lights up while running
-    set("cst" + n, comp ? "· comp running" : "· comp idle");
+    set("cst" + n, comp ? "· running" : "· idle");
     const fan = w["Fan speed " + sfx + " %"] ?? 0, eev = w["EEV position " + sfx + " %"] ?? 0;
     set("fan" + n, fan.toFixed(0) + "%"); $("fanB" + n).style.width = fan + "%";
     unit3d.fans[+n - 1] = fan; // drives the 3D unit's fan animation

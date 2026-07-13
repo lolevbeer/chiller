@@ -338,6 +338,9 @@ high/low-pressure pressostat digital inputs (`HiP_PstatCirc1_Din.Val`,
   Sw/Sched/BMS`) if "why is it off" ever needs more than the reg-0 enum.
 - The virtual pGD at `http://<ip>/pgd/index.htm` mirrors the physical display —
   info screens are read-only and safe to browse; Esc backs out.
+- The dashboard embeds the controller's interactive HTML5 pGD through a same-origin
+  `/pgd/` proxy. This keeps the live display and its controller keys working when the
+  dashboard is served over HTTPS or viewed remotely. Those keys operate the live unit.
 
 ## How the map was found (`correlate_registers.py`)
 
