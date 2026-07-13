@@ -160,7 +160,7 @@ h2 .cst { color: var(--dim); font-weight: 400; }
 .u-legend .u-series:first-child { display: none !important; } /* the "Time:" row is noise — the x-axis says it */
 /* --- 3D unit: three.js scene (vendored, served at /three.js) — glossy-white
    PBR cabinet with real environment reflections. All geometry and behavior
-   live in the module script at the bottom of the page; this div just hosts
+   live in public/unit3d.js (served at /unit3d.js); this div just hosts
    the canvas. --- */
 /* full-bleed strip: the model + chips span the whole viewport, the rest of the
    page keeps its column (100vw breakout; body overflow-x: clip eats the sliver
@@ -228,12 +228,13 @@ h2 .cst { color: var(--dim); font-weight: 400; }
 }
 details { padding-top: 18px; color: var(--dim); font-size: 13px; }
 /* the alert triangle IS the disclosure marker, so drop the default one */
-summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 7px; }
+summary { cursor: pointer; list-style: none; display: flex; align-items: center;
+  justify-content: center; gap: 7px; }
 summary::-webkit-details-marker { display: none; }
 /* the hover title is the only place the log's ~50-event ceiling is stated */
 summary .info { color: var(--mut); flex: none; }
 summary .info svg { display: block; width: 14px; height: 14px; }
-details table { border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+details table { border-collapse: collapse; margin: 10px auto 0; font-size: 12px; }
 details td, details th { padding: 3px 10px; text-align: left; color: var(--mut); }
 .pgd-panel { max-width: 820px; margin-inline: auto; }
 .pgd-panel h2 { margin-bottom: 12px; }
@@ -346,8 +347,6 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
 
 <!-- the controller keeps ~50 events; this is the whole fault history it will admit to -->
 <details><summary title="Every fault the controller still holds — its log keeps only ~50 events, so older faults (and the Stop half of a Start/Stop pair) fall off the end."><span class="info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></span>Alarm history</summary><table id="alarmlog"></table></details>
-<footer>refreshes every 5 s</footer>
-
 <script src="/app.js"></script>
 <!-- three.js module resolution for the 3D unit: the postprocessing addons under
      /three/addons/ (served from node_modules/three/examples/jsm by lib/routes.js)

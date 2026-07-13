@@ -58,7 +58,7 @@ const view = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(28, 1, .1, 50);
 // bloom: the cabinet is white powder-coat, so almost every panel sits near full
 // luminance — THRESHOLD is what keeps this from turning the whole unit into a
-// glowing blob. At .95 only the specular hotspots (the gloss highlights that
+// glowing blob. At .85 only the specular hotspots (the gloss highlights that
 // roll off the door skins and the fan hubs) and the compressor emissive glow
 // bleed, which is what a camera actually does. STRENGTH is the bleed's
 // intensity, RADIUS how far it spreads. Turn STRENGTH to 0 to disable.

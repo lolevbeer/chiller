@@ -52,7 +52,7 @@ landmark coordinates, and every adjustable knob).
 | Control box | 6×53×42 box | right end, upper third, horizontally centered (122, 50, 0) |
 | Glycol stubs | 2 cylinders (r 7 × 14), supply above return (per the drawing) | left end, (−124, −14/−37, 15) |
 | Reading chips | 6 HTML chips holding every live reading, each pinned to a 3D anchor riding the unit (`chipAnchors`) and reprojected after every render; chips whose anchor faces away dim (`.far`). One chip per circuit carries the **whole loop** — low side then high side, split by a hairline "low side / high side" rule (they were two chips, front and back, until a circuit read better as one card). Safety + runtime sit in a static column left of the cabinet; pump/flow pills along the scene bottom | glycol out/in at the stubs, demand over the top, reservoir at the filler cap, each full circuit at its compressor |
-| Reservoir | 70×154×110 gray-steel tank (base rail to top skin, full depth to the back panel) + filler cap (r 5) through the top skin | left third, same end as its stubs, (−75, 4, −2); cap (−105, 87, 30) |
+| Reservoir | 70×154×110 gray-steel tank (base rail to top skin, full depth to the back panel) + filler cap (r 5) through the top skin | left third, same end as its stubs, (−75, 4, −2); cap (−100, 87, −45) |
 | Condenser zones | 2 see-through mesh screens (148×69, canvas-tiled texture) over real openings in the back skin, stacked A over B, spanning x −40…+108 (hugging the control-box end, per the rear-view drawing); two fans per screen, each 5 curved ring-sector blades on a hub, recessed inside behind it | back, screens z −60, fans z −53 |
 
 Live bindings: `tick()` fills the chips by element id exactly as it did when they
