@@ -145,9 +145,7 @@ const SLAT_TILT = .4; // rad (~23°) — the shed angle of the white door slats
 box(240, 4, 123, 0, 83, 0, steel);       // top
 box(240, 4, 123, 0, -83, 0, dark);       // bottom
 box(4, 170, 123, -118, 0, 0, steel);      // end panel, glycol end
-// …and the control-box end. On the real cabinet the pGD display is mounted on
-// this panel, so this is the mesh you click to open it (see openPgd below).
-const pgdPanel = box(4, 170, 123, 118, 0, 0, steel);
+box(4, 170, 123, 118, 0, 0, steel);        // control-box end panel
 // back panel in five pieces, leaving two real openings (x −40…108, y 8…77 /
 // −69…0) behind the condenser screens so they actually see through
 box(80, 170, 4, -80, 0, -59.5, steel);   // …blank third at the glycol end
@@ -185,8 +183,10 @@ for (let y = SLAT_Y0; y >= -67; y -= SLAT_PITCH) // flat blades, flush with the 
   box(10, SLAT_T, SEP_D, 0, y, SEP_Z, trim);
 // flat door bezels flanking each louver stack (photo: white margins before the louvers)
 for (const x of [-110, -9, 9, 110]) box(8, 134, 4, x, -6, 59.5, steel);
-{ const cb = box(6, 53, 42, 122, 50, 0, M(0xe8ecef, .3, .3)); // control box, right end — upper third of the panel, horizontally centered (end-view drawing)
-  cb.add(new THREE.LineSegments(new THREE.EdgesGeometry(cb.geometry), // edge outline so the white box reads on the white panel
+// The pGD lives on this control box, not on the larger cabinet end panel behind
+// it. Keep the mesh so pointer raycasts can bind the modal to the visible control.
+const pgdPanel = box(6, 53, 42, 122, 50, 0, M(0xe8ecef, .3, .3)); // control box, right end — upper third of the panel, horizontally centered (end-view drawing)
+{ pgdPanel.add(new THREE.LineSegments(new THREE.EdgesGeometry(pgdPanel.geometry), // edge outline so the white box reads on the white panel
     new THREE.LineBasicMaterial({ color: 0x141518 }))); }
 unit.add(new THREE.LineSegments( // black edge trim on the cabinet silhouette
   new THREE.EdgesGeometry(new THREE.BoxGeometry(241, 171, 124)),
@@ -356,7 +356,8 @@ host.addEventListener("pointerdown", e => {
   grab = { x: e.clientX, y: e.clientY }; host.setPointerCapture(e.pointerId);
 });
 host.addEventListener("pointermove", e => {
-  if (!grab) return void (host.style.cursor = overPgd(e) ? "pointer" : "");
+  if (!grab) return void setPgdHover(e);
+  setPgdHover();
   if (Math.abs(e.clientX - grab.x) > SLOP || Math.abs(e.clientY - grab.y) > SLOP) dragged = true;
   yawG.rotation.y += (e.clientX - grab.x) * DRAG;
   pitchG.rotation.x = THREE.MathUtils.clamp( // drag down = look from above, same feel as the old CSS model
@@ -365,22 +366,50 @@ host.addEventListener("pointermove", e => {
   if (noMotion) render();
 });
 host.addEventListener("pointerup", e => {
-  if (grab && !dragged && overPgd(e)) openPgd(); // a click on the panel, not a rotate that ended there
+  const clickedPgd = grab && !dragged && overPgd(e); // a click on the panel, not a rotate that ended there
   grab = null;
+  setPgdHover(clickedPgd ? null : e);
+  if (clickedPgd) openPgd();
 });
-host.addEventListener("pointercancel", () => grab = null);
+host.addEventListener("pointercancel", () => { grab = null; setPgdHover(); });
+host.addEventListener("pointerleave", () => setPgdHover());
 
-// The pGD is mounted on the control-box end panel of the real cabinet, so that
-// panel is the way into the controller here too: click it and the display opens.
-// Raycast the whole unit and check the FIRST hit is the panel — testing the mesh
-// alone would also fire when the panel is round the back, through the cabinet.
+// The pGD is mounted on the control box of the real cabinet, so that box is the
+// way into the controller here too: click it and the display opens. Raycast the
+// whole unit and check the first MESH hit — decorative edge lines also raycast,
+// but must not mask the visible solid under the pointer.
 const ray = new THREE.Raycaster(), ptr = new THREE.Vector2();
+let pgdHovered = false, pgdGlow = 0, pgdGlowTarget = 0;
 function overPgd(e) {
   const r = renderer.domElement.getBoundingClientRect();
   if (!r.width || !r.height) return false;
   ptr.set((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1);
   ray.setFromCamera(ptr, camera);
-  return ray.intersectObject(unit, true)[0]?.object === pgdPanel;
+  const hit = ray.intersectObject(unit, true).find(({ object }) => object.isMesh)?.object;
+  return hit === pgdPanel;
+}
+function setPgdHover(e) {
+  const hint = document.getElementById("pgdHint"), over = !!e && overPgd(e);
+  host.style.cursor = over ? "pointer" : "";
+  if (over !== pgdHovered) {
+    pgdHovered = over;
+    pgdGlowTarget = over ? 1 : 0;
+    if (noMotion) { // reduced motion: apply the state without an animated transition
+      pgdGlow = pgdGlowTarget;
+      pgdPanel.material.emissive.setHex(0x303b85);
+      pgdPanel.material.emissiveIntensity = pgdGlow * .8;
+      render();
+    }
+  }
+  if (!hint) return;
+  hint.classList.toggle("show", over);
+  if (over) {
+    const r = host.getBoundingClientRect();
+    hint.style.left = THREE.MathUtils.clamp(e.clientX - r.left + 12,
+      8, r.width - hint.offsetWidth - 8) + "px";
+    hint.style.top = THREE.MathUtils.clamp(e.clientY - r.top - hint.offsetHeight - 10,
+      8, r.height - hint.offsetHeight - 8) + "px";
+  }
 }
 function openPgd() {
   const dlg = document.getElementById("pgdDialog"), frame = document.getElementById("pgdFrame");
@@ -402,11 +431,22 @@ function frame(t) {
   // ease displayed speed toward the live target (~3 s exponential time constant)
   // so the 5 s refreshes don't snap the blades between speeds
   for (const z of [0, 1]) fanSpd[z] += (unit3d.fans[z] - fanSpd[z]) * Math.min(1, dt / 3);
+  // Ease the pGD control-box highlight in and out instead of flashing between
+  // states. Exponential easing is frame-rate independent; ~120 ms is responsive
+  // while still visibly soft.
+  const glowBefore = pgdGlow;
+  pgdGlow += (pgdGlowTarget - pgdGlow) * (1 - Math.exp(-dt / .12));
+  if (Math.abs(pgdGlowTarget - pgdGlow) < .002) pgdGlow = pgdGlowTarget;
+  const glowChanged = Math.abs(pgdGlow - glowBefore) > .0001;
+  if (glowChanged) {
+    pgdPanel.material.emissive.setHex(0x303b85);
+    pgdPanel.material.emissiveIntensity = pgdGlow * .8;
+  }
   // ponytail: 100% = 2.5 rev/s is display calibration, not physics — tune to taste
   fans.forEach((f, i) => f.rotation.z -= dt * 2 * Math.PI * 2.5 * fanSpd[i < 2 ? 0 : 1] / 100);
   // nothing moving (turntable stopped, not dragging, fans parked) → identical pixels, skip the draw;
   // data changes still show because unit3d.changed() renders on its own
-  if (visible && (auto || grab || fanSpd[0] > .1 || fanSpd[1] > .1)) render();
+  if (visible && (auto || grab || fanSpd[0] > .1 || fanSpd[1] > .1 || glowChanged)) render();
   requestAnimationFrame(frame);
 }
 host.classList.remove("flat"); // the whole module built without throwing — drop the no-3D fallback layout (any throw above leaves it on)
