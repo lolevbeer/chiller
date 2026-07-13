@@ -11,6 +11,7 @@
     "typecheck": "tsc -p jsconfig.json"
   },
   "dependencies": {
+    "@slack/bolt": "^4.7.3",
     "modbus-serial": "^8.0.17",
     "three": "^0.185.1",
     "uplot": "^1.6.32"

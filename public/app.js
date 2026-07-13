@@ -26,7 +26,7 @@ async function tick() {
   $("stat").className = grade === "ok" ? "" : grade; // text echoes the dot so alarms read at a glance
 
   set("glyIn", r(69).toFixed(1)); set("glyOut", r(68).toFixed(1));
-  // health tint on the supply temp — same bands the Slack reports use (see slackPayload)
+  // health tint on the supply temp — amber above 30 °F, red above 40 °F
   $("glyOut").className = "t out" + (r(68) > 40 ? " bad" : r(68) > 30 ? " warn" : "");
   set("resT", r(132).toFixed(1) + " °F");
   histSetp = r(70); // feeds the history chart's setpoint reference line
@@ -119,20 +119,10 @@ function safety(w, regs) {
     hrs("Compressor", 135, 141) + hrs("Fan", 158, 160) + hrs("Pump", 129, 131);
 }
 
-// Alarm timestamps carry a "+00:00" the controller doesn't mean (its clock runs
-// site-local) — same quirk as the datalogger, so parse as local wall-clock.
-const at = (ts) => new Date(String(ts).slice(0, 19));
-const when = (ts) => {
-  const d = at(ts);
-  if (isNaN(+d)) return ts;
-  const days = Math.floor((Date.now() - +d) / 86400e3);
-  return days > 0 ? `${days} d ago` : d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-};
-const stamp = (ts) => {
-  const d = at(ts);
-  return isNaN(+d) ? ts : d.toLocaleString([], { month: "short", day: "numeric",
-                                                hour: "numeric", minute: "2-digit" });
-};
+// Human-facing dates come from the same formatter used by Slack. It preserves
+// the controller's site-local clock fields despite their misleading +00:00.
+const stamp = (ts) => esc(ChillerDateTime.moment(ts));
+const when = stamp;
 // How long the fault stood — the useful part: a 6.9 h high-temp is a different
 // story from a 2 min one, and the log's Start/Stop pair is the only place it shows.
 // A Start with no Stop does NOT mean "still active": the controller's log holds
@@ -140,9 +130,8 @@ const stamp = (ts) => {
 // Only an alarm the controller currently reports as active gets to say so.
 const lasted = (a) => {
   if (!a.cleared) return alarms?.active?.some((x) => x.name === a.name) ? "still active" : "—";
-  const m = Math.round((+at(a.cleared) - +at(a.at)) / 60000);
-  if (!isFinite(m)) return "—";
-  return m < 1 ? "<1 min" : m < 90 ? m + " min" : (m / 60).toFixed(1) + " h";
+  const ms = ChillerDateTime.elapsed(a.at, a.cleared);
+  return ms === null ? "—" : ms === 0 ? "cleared immediately" : ChillerDateTime.duration(ms);
 };
 
 // The full fault log, newest first (the controller keeps ~50 events).
@@ -165,12 +154,11 @@ function drawAlarmLog() {
 })();
 
 let lastGoodMs = 0; // last successful refresh, so "offline" can say how stale the data is
-const age = ms => { const s = Math.round(ms / 1000);
-  return s < 90 ? s + " s" : s < 5400 ? Math.round(s / 60) + " min" : Math.round(s / 3600) + " h"; };
+const age = ms => ChillerDateTime.duration(ms, 1) || "—";
 function net(ok) {
   const el = $("net");
   if (ok) lastGoodMs = Date.now();
-  el.textContent = ok ? "updated " + new Date().toLocaleTimeString()
+  el.textContent = ok ? "updated " + ChillerDateTime.clock(new Date(), true)
                       : "offline" + (lastGoodMs ? " · data " + age(Date.now() - lastGoodMs) + " old" : "");
   el.className = ok ? "" : "down";
   document.body.classList.toggle("offline", !ok);

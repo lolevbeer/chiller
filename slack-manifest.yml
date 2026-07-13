@@ -1,0 +1,24 @@
+_metadata:
+  major_version: 1
+display_information:
+  name: Chiller
+  description: Read-only chiller status and history
+  background_color: "#111827"
+features:
+  bot_user:
+    display_name: Chiller
+    always_online: false
+  slash_commands:
+    - command: /chiller
+      description: Read current chiller status, alarms, trends, and runtimes
+      usage_hint: status | alarms | trend 6h | circuit a | runtimes | why
+      should_escape: false
+oauth_config:
+  scopes:
+    bot:
+      - commands
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  is_hosted: false
+  token_rotation_enabled: false

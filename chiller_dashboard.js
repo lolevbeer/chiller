@@ -8,9 +8,10 @@
 const http = require("http");
 const { HOST } = require("./lib/config"); // also loads .env before anything reads process.env
 const { scale, read, LABELS } = require("./lib/modbus");
-const { readWeb, WEB_VARS, ROW } = require("./lib/webvars");
+const { readWeb, WEB_VARS, UNUSED_WEB_VARS, ROW } = require("./lib/webvars");
 const { readLog, TSTAMP, logInsert, logSlice, logLoop } = require("./lib/logcache");
-const { slackPayload, startSlack } = require("./lib/slack");
+const { step, startSlack } = require("./lib/slack");
+const { startSlackCommands } = require("./lib/slack_commands");
 const { handle, PAGE } = require("./lib/routes");
 
 // modbus-serial can leak an async socket error (e.g. connect ETIMEDOUT when the
@@ -28,10 +29,11 @@ if (require.main === module) {
     console.log(`chiller dashboard on http://0.0.0.0:${PORT}  (chiller ${HOST})`)
   );
   startSlack(); // no-op unless SLACK_WEBHOOK_URL is set
+  startSlackCommands().catch((e) => console.error("Slack commands failed to start:", e));
   // datalogger cache: 7 d backfill, then tail polling. Fail fast if the loop
   // ever escapes its own error handling — systemd restarts clean; the
   // alternative is a zombie serving silently frozen history.
   logLoop().catch((e) => { console.error("log loop crashed:", e); process.exit(1); });
 }
 
-module.exports = { scale, read, readWeb, readLog, TSTAMP, LABELS, WEB_VARS, ROW, PAGE, slackPayload, logInsert, logSlice };
+module.exports = { scale, read, readWeb, readLog, TSTAMP, LABELS, WEB_VARS, UNUSED_WEB_VARS, ROW, PAGE, step, logInsert, logSlice };

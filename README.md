@@ -1,457 +1,620 @@
 # Chiller — G&D glycol chiller monitoring
 
-Read-only monitoring of a G&D glycol chiller (Carel c.pCO controller, two refrigeration
-circuits) at a remote site. A Node.js dashboard (`node:http`, no framework) reads live
-data over two interfaces the controller exposes on its Ethernet port and serves it as a
-web page + JSON API.
+Read-only monitoring for a G&D air-cooled glycol chiller at Lolev Beer. A small
+Node.js server reads the Carel c.pCO controller over Modbus TCP and its HTTP
+microwebsite, then serves a live dashboard, JSON/CSV endpoints, alarm history,
+Slack alerts, and read-only Slack commands.
 
-```
-Mac (home LAN 192.168.4.0/22)
- │  Teleport VPN (WiFiman) + teleport_split.sh — only 192.168.1.0/24 rides the tunnel
+```text
+Mac on home LAN
+ │  Ubiquiti Teleport + teleport_split.sh
  ▼
-site LAN 192.168.1.0/24, behind UniFi gateway (double-NATed behind Comcast Business)
- │
- ├── Raspberry Pi (hostname `chiller`) — runs this dashboard 24/7 as a systemd
- │     service on :80 (see On-site host below); polls the controller over the LAN
- ▼
-c.pCO controller @ 192.168.1.69
- ├── Modbus TCP :502  — INPUT registers (FC4): temps, pressures, superheats, hours
- └── HTTP :80         — Carel microwebsite; getvar.csv exposes ALL ~4000 PLC variables
+site LAN 192.168.1.0/24
+ ├── Raspberry Pi `chiller` — dashboard and Slack service
+ └── Carel c.pCO 192.168.1.69
+      ├── Modbus TCP :502 — live INPUT registers
+      └── HTTP :80 — web variables, alarms, datalogger, and virtual pGD
 ```
 
-## The chiller and how it works
+The application never writes controller registers. It has no built-in
+authentication; put an access-control layer such as Cloudflare Access in front
+of it before exposing it beyond a trusted network.
 
-**The machine.** A G&D Chillers air-cooled packaged glycol chiller at Lolev Beer —
-one white cabinet (93.9 W × 48.2 D × 66.4 H in per the install drawing) containing
-two independent refrigeration circuits (A and B), the glycol reservoir, both pumps,
-and the Carel c.pCO PLC that runs it all and exposes the data this dashboard reads.
-Cabinet layout per the install drawings and factory photos: twin louvered doors across
-the front with the compressors behind them (two per circuit — the datalogger carries two
-state columns per circuit, `Comp1Circ1…`/`Comp2Circ1…`), two full-width condenser coil
-faces stacked on the back with the fans inside behind them — the openings start at the
-control-box end, and the blank third at the other end carries the auxiliary port — the
-control box on the right end, and glycol supply/return connections on the left end.
-The page's 3D model approximates this; see below for its geometry and where it still
-deviates from the drawings.
+## Contents
 
-### The 3D unit model — geometry and spec comparison
+- [Quick start](#quick-start)
+- [Production operation](#production-operation)
+- [Deploying to the Pi](#deploying-to-the-pi)
+- [Slack](#slack)
+- [HTTP interface](#http-interface)
+- [Architecture and data sources](#architecture-and-data-sources)
+- [Hardware reference](#hardware-reference)
+- [Register reference](#register-reference)
+- [Network access and recovery](#network-access-and-recovery)
+- [Repository map](#repository-map)
 
-One hand-built three.js scene (`public/unit3d.js`, served at `/unit3d.js`;
-a TWEAK MAP comment at the top of that file documents the coordinate system,
-landmark coordinates, and every adjustable knob).
-1 model unit ≈ 0.391 in: the cabinet is 240 × 170 × 123 units = the drawing's
-93.9 W × 66.4 H × 48.2 D in. +z is the front, +x the control-box end.
+## Quick start
 
-| Part | Geometry (model units) | Placement |
-|------|------------------------|-----------|
-| Shell | 240×170×123: glossy-white top/ends, dark bottom, black edge trim; back skin in five pieces leaving two real condenser openings | |
-| Base rail | 244×12×127 black box, slightly proud | bottom |
-| Doors | 2 × 10 louver slats (93×8×3, tilted .55 rad), black top band + corner posts (all four cabinet corners), 18-wide center post with recessed slots, flat side bezels | front, z +59.5 |
-| Badges | 3 G&D-seal medallions (r 7 × 3 cylinders, vendor SVG canvas-mapped onto the front cap) | top of each door + centered on the control-box end just below mid-height (120.5, −14, 0) |
-| Compressors | 2 cylinders (r 18 × 39), colored by circuit (A blue, B green — the `COMP` table, matching `--ckt-a`/`--ckt-b` on the history chart), light up (emissive) while running | behind the louvers, stacked A above B at (60, 20/−44, 36) |
-| Control box | 6×53×42 box | right end, upper third, horizontally centered (122, 50, 0) |
-| Glycol stubs | 2 cylinders (r 7 × 14), supply above return (per the drawing) | left end, (−124, −14/−37, 15) |
-| Reading chips | 6 HTML chips holding every live reading, each pinned to a 3D anchor riding the unit (`chipAnchors`) and reprojected after every render; chips whose anchor faces away dim (`.far`). One chip per circuit carries the **whole loop** — low side then high side, split by a hairline "low side / high side" rule (they were two chips, front and back, until a circuit read better as one card). Safety + runtime sit in a static column left of the cabinet; pump/flow pills along the scene bottom | glycol out/in at the stubs, demand over the top, reservoir at the filler cap, each full circuit at its compressor |
-| Reservoir | 70×154×110 gray-steel tank (base rail to top skin, full depth to the back panel) + filler cap (r 5) through the top skin | left third, same end as its stubs, (−75, 4, −2); cap (−100, 87, −45) |
-| Condenser zones | 2 see-through mesh screens (148×69, canvas-tiled texture) over real openings in the back skin, stacked A over B, spanning x −40…+108 (hugging the control-box end, per the rear-view drawing); two fans per screen, each 5 curved ring-sector blades on a hub, recessed inside behind it | back, screens z −60, fans z −53 |
-
-Live bindings: `tick()` fills the chips by element id exactly as it did when they
-were side panels (no data flows through the module — it only positions them), and
-via the `unit3d` bridge const the fans spin at the live fan-speed % (100 % =
-2.5 rev/s — display calibration, not physics) and the compressor cylinders light
-up while their circuit runs. Behavior: loads front-facing and static with no
-auto-turntable (the 36 s tour is still wired behind the `auto` flag), drag to
-rotate (pitch clamped −30°…80°) — the high-side chips live on the back, so a
-drag tours all readings — `prefers-reduced-motion` gets the same static pose
-repainted every refresh.
-
-#### Spec comparison (2026-07-12, install drawings + factory photos)
-
-Checked by rotating the rendered model to each reference view (front+right photo,
-front+left photo, rear+right-side drawing, left-side+front drawing).
-
-Matches: overall proportions (exactly the drawing's 93.9 × 48.2 × 66.4); twin
-louvered doors with black frame, center post, and a round badge per door;
-control box on the right end; glycol supply-over-return on the left end, low and
-toward the front; black base rail and edge trim; compressors visible through the
-louvers.
-
-Known deviations, most significant first:
-
-1. **No auxiliary port** on the model's back panel (drawing: bottom corner of
-   the blank third).
-2. Cosmetic: base rail lacks the two forklift cutouts; only the right end panel
-   carries a seal decal (real: both ends).
-
-Formerly-listed deviations since fixed against the photos: glossy-white
-powder-coat finish with black middle column and corner posts (was brushed
-steel), real G&D seal medallions on the doors and right end (were plain black
-pucks), 10 slats per door with flat side bezels, control box resized to the
-photo.
-
-**The glycol loop.** The chiller never touches beer: it chills an inhibited
-propylene-glycol/water mix that circulates out to the fermenter and brite-tank
-jackets. Warm glycol returns from the process (**in**, reg 69), collects in the
-reservoir (temp reg 132, level via web var), is pumped through each circuit's
-evaporator, and leaves as chilled supply (**out**, reg 68) held at the cooling
-setpoint (CoolSetP, reg 70) — high-20s °F for beer, which is why the loop runs
-glycol and not plain water. ΔT (in − out) is how much heat is being removed right
-now. Two pumps: the **chiller pump** circulates glycol through the evaporators, the
-**process pump** pushes it out to the tanks. A flow switch per circuit (Flow A/B
-pills) is a safety: no flow with a compressor running would freeze and burst the
-evaporator, so the controller locks the circuit out — that's why those dots go red.
-
-**The refrigeration cycle** (per circuit — this is what the high side / low side
-columns on the page mean):
-
-1. **Compressors** (high side) squeeze refrigerant vapor to high pressure and
-   temperature — discharge pressure (reg 3/35) and its saturation temperature,
-   condensing temp (reg 4/36).
-2. **Condenser** — the hot vapor condenses to liquid in the coil as the back-panel
-   fans pull ambient air through the cabinet; fan speed (%) modulates to hold
-   discharge pressure in range (head-pressure control), so on cold days the fans
-   barely turn.
-3. **Electronic expansion valve** (EEV position %, driven by a Carel EVD module —
-   status reg 28) — high-pressure liquid flashes across the valve to low pressure
-   and gets very cold.
-4. **Evaporator** (low side) — the cold refrigerant boils in the plate heat
-   exchanger, absorbing heat from the glycol: suction pressure (reg 10/42) and
-   evaporating temp (reg 11/43) describe this side. The EVD trims the valve to hold
-   **suction superheat** (suction temp 9/41 minus evaporating temp = reg 23/55) a
-   few degrees positive — too little risks liquid slugging the compressors, too
-   much starves the evaporator and wastes capacity.
-5. The vapor returns to the compressors and the loop repeats.
-
-**Control.** The c.pCO compares glycol supply temperature to the setpoint, computes
-a cooling demand (power request %, reg 1), and stages circuits/compressors to match.
-Chiller status (reg 0) is a small enum — 1 Standby, 2 Off—alarm, … 9 Running — shown
-as the header dot. Everything here is read-only: setpoints live in HOLDING registers
-the dashboard never writes.
-
-## Quick start (dev machine)
-
-The production copy runs on the on-site Pi (below); this is for hacking on it locally:
+The production service runs on the on-site Pi. For local development, connect
+Teleport in WiFiman and split the tunnel before starting the app:
 
 ```sh
-# 1. Get on the site network (see Network access below)
-#    Connect Teleport in WiFiman, then:
-./teleport_split.sh          # sudo; re-run after every Teleport reconnect
-
-# 2. Run the dashboard
-npm install        # one-time; installs modbus-serial + uplot + three
-npm start          # CHILLER_IP=... PORT=... node chiller_dashboard.js
-npm run dev        # same, plus live reload: saving chiller_dashboard.js or dashboard.html
-                   # restarts the server and refreshes any open browser tab (dev only)
+./teleport_split.sh          # uses sudo; repeat after each Teleport reconnect
+npm install                  # first run, or after package.json changes
+npm start                    # http://localhost:8000
 ```
 
-| Route      | Serves                                                                  |
-|------------|-------------------------------------------------------------------------|
-| `/`        | Minimal Linear-inspired page built around the three.js 3D model of the unit (a full-viewport-width strip loading front-facing and static; drag to rotate it by hand), styled after the real G&D cabinet — glossy-white powder-coat PBR panels with environment reflections and a threshold-gated bloom pass (only the specular hotspots and the running compressors' glow bleed; the white panels themselves stay white), black trim, middle column, corner posts and base rail, twin louvered doors with G&D-seal logo badges (a third seal on the right end), control box on the right end (proportions from the install drawing); four condenser fans spin at their live reported speeds behind the back screens, and the two compressors glimpsed through the front louvers light up while running. **Every live reading is a chip pinned to its component on the model** (see "The 3D unit model" above): glycol out (tinted amber above 30 °F, red above 40 °F — the same bands `slackPayload` uses) + setpoint + supply pressure at the supply stub, in + ΔT at the return stub, cooling demand over the top, reservoir temp at the filler cap, and one chip per circuit at its compressor carrying that circuit's entire loop — low side (suction, evaporating, superheat, EEV) above high side (discharge, condensing, fan %), split by a hairline rule; far-side chips dim. A **safety column** sits to the left of the cabinet — the propane leak sensors (Gas A/B: green when clear, red with the % of LEL when not; amber if a sensor stops reporting, since a dead leak sensor is itself a fault), the HP/LP mechanical pressure switches (invisible until tripped), and the alarm state: a red card naming any standing alarm, or, when clear, the last fault and when it hit. Pump/flow status dots and runtime counters run along the scene bottom. Below the model: glycol history chart (6 h/24 h/7 d, °F axis, in/out lines under a soft gradient fill, dashed line = current setpoint — the log has no setpoint column, so no history for it). **Circuit A is blue and circuit B green throughout** (`--ckt-a`/`--ckt-b`), the same pair that paints the two compressors on the 3D model, so a circuit looks the same wherever you meet it: strips along the chart bottom mark when each circuit's compressors were running (A above B), and dotted Condenser A/B lines on their own right-hand °F axis show each circuit's condensing temp, derived from the logged discharge pressure via the R290 saturation curve — the same conversion the controller uses live. Then an **Alarm history** disclosure (every fault the controller still holds — name, when it started, how long it stood; a fault whose Stop has aged out of the controller's ~50-event buffer shows "—" for duration rather than falsely claiming it's still active); re-renders in place every 5 s. A failed refresh dims the data and stamps the header "offline · data N min old" |
-| `/api`     | JSON `{addr: raw_uint16}` of INPUT registers 0..161                     |
-| `/api/web` | JSON `{label: value}` of the 12 web-only points (engineering units)     |
-| `/api/all` | `{"regs": ..., "web": ...}` combined payload the page's refresh loop uses |
-| `/api/alarms` | `{"active": [{name, since}], "recent": [{name, at, cleared}]}` — the controller's alarm log, Start/Stop events folded into one row per fault; polled every 60 s (faults don't need 5 s resolution) |
-| `/api/log` | CSV slice of the onboard datalogger (`?start=&stop=` in `YYYY-MM-DDThh:mm:ss`), served instantly from an in-process cache that also persists to `log_cache.csv` (gitignored; `LOG_FILE` overrides the path) — a restart reloads 7 d instantly and backfills only the gap since the last saved row, instead of re-downloading everything (~15 min). The controller needs ~60 s per `getlog.csv` query (measured), so the backfill fetches 6 h chunks newest-first (each buffered whole, then merged), then polls only the tail every `LOG_POLL_MIN` min (default 5). `X-Log-Loading: 1` header while the backfill runs; the page no longer badges this, but uses it to poll every 5 s instead of 60 s and to word the empty-chart message ("loading history…" vs "no log data for this range") |
-| `/uplot.js` `/uplot.css` | [uPlot](https://github.com/leeoniya/uPlot) assets, vendored from `node_modules` (no CDN) |
-| `/three.js` `/three.core.min.js` | [three.js](https://threejs.org) module build for the 3D unit model, vendored from `node_modules` (no CDN; the module imports `./three.core.min.js`, hence the second route) |
-| `/three/addons/*` | three.js addon modules (`node_modules/three/examples/jsm`), read on demand — the postprocessing chain (`EffectComposer`, `RenderPass`, `UnrealBloomPass`, `OutputPass`) the model's bloom needs. They `import ... from "three"`, which the page's import map resolves back to `/three.js`. Only existing `.js` files resolving inside `examples/jsm` are served (no `../` traversal) |
-| `/logo.svg` | G&D Chillers seal (`gd_seal.svg`, svgo-minified vendor art) — the page paints it onto the 3D unit's door badges |
-
-`CHILLER_IP` overrides the target (default 192.168.1.69); `CHILLER_REGS` the read span
-(default 160); `PORT` the listen port (default 8000). Needs Node 18+ (uses native
-`fetch`); dependencies are `modbus-serial`, `uplot` and `three`. `npm run typecheck`
-runs `tsc` over the JSDoc'd server modules (`jsconfig.json`; dev machines only — the
-Pi can skip the dev deps with `npm install --omit=dev`). Auth is deliberately absent —
-Cloudflare Access is the intended front when exposed.
-
-Env vars can live in a gitignored `.env` next to the code (`KEY=value` lines, loaded
-natively via `process.loadEnvFile()` — no dotenv). The webhook URL belongs there, not
-in the repo or shell history.
-
-Set `SLACK_WEBHOOK_URL` (a Slack Incoming Webhook) and the dashboard also posts the
-glycol temps — in/out, setpoint, reservoir — every 10 minutes (`SLACK_EVERY_MIN`
-overrides), plus once at startup so a bad webhook fails loudly. Glycol-out colors the
-message bar: green below 30 °F, red above 40 °F, plain between. A failed Modbus read
-posts one warning per outage, then goes quiet until it recovers — except at startup,
-where a failed first read is suppressed (a service restart races the chiller still
-holding the old process's Modbus socket; warning there is pure noise). Unset = off.
-
-## On-site host (Raspberry Pi)
-
-Since 2026-07-11 the dashboard runs continuously on a Pi on the site LAN — an
-ARMv6 (Pi 1/Zero-class) board that was already there running OctoPrint, renamed
-`chiller` (so `http://chiller.local` on the site LAN — mDNS is link-local and does
-NOT cross the Teleport tunnel; from home, use the Pi's IP). It polls the controller
-over the local subnet, so Slack reporting works with no VPN in the loop.
-
-Setup notes, hard-won:
-
-- **Node on armv6l**: official/NodeSource builds don't exist for ARMv6 — use
-  [unofficial-builds.nodejs.org](https://unofficial-builds.nodejs.org) (v20.19.4,
-  `linux-armv6l`). Before extracting into `/usr/local`, **delete the old npm**
-  (`sudo rm -rf /usr/local/lib/node_modules/npm`): tar overwrites files but never
-  removes stale ones, and leftover nested deps from an ancient npm shadow the new
-  ones (`Class extends value undefined is not a constructor`, `Minipass is not a
-  constructor`). Verify the tarball before extracting (`tar -tJf … && echo OK`) —
-  extraction takes 5–10 quiet minutes on ARMv6; don't interrupt it.
-- **Raspbian Buster is EOL**: apt 404s until repointed —
-  `sudo sed -i 's|raspbian.raspberrypi.org|legacy.raspbian.org|' /etc/apt/sources.list`
-  then `sudo apt update --allow-releaseinfo-change`.
-- **systemd service** `/etc/systemd/system/chiller.service`, enabled at boot:
-
-  ```ini
-  [Unit]
-  Description=Chiller dashboard
-  After=network-online.target
-  Wants=network-online.target
-
-  [Service]
-  WorkingDirectory=/home/pi/chiller
-  Environment=CHILLER_IP=192.168.1.69
-  Environment=PORT=80
-  AmbientCapabilities=CAP_NET_BIND_SERVICE
-  EnvironmentFile=-/home/pi/chiller/.env
-  ExecStart=/usr/local/bin/node chiller_dashboard.js
-  Restart=always
-  User=pi
-
-  [Install]
-  WantedBy=multi-user.target
-  ```
-
-  `AmbientCapabilities` is what lets a non-root unit bind port 80. OctoPi's
-  haproxy previously owned :80 (proxying the OctoPrint UI) — it's disabled
-  (`systemctl disable --now haproxy`); re-enable it and drop the two port lines
-  to get OctoPrint's UI back.
-- **Deploy loop**: commit+push here, then on the Pi
-  `cd ~/chiller && git pull && sudo systemctl restart chiller`
-  (`npm install` first only if `package.json` changed).
-- **Debugging**: `journalctl -u chiller -n 30` for crashes;
-  `curl -s localhost/api | head -c 60` proves the Modbus path end-to-end.
-
-## How the two data sources work
-
-**Modbus TCP (FC4 input registers).** The PLC program maps internal strategy variables
-onto INPUT registers 0..~158. Analog values are signed int16 stored ×10 (one decimal:
-raw 2448 = 244.8 psi; negatives wrap, `scale()` handles both). Integer registers
-(status enums, power %, hour counters) are NOT scaled. Reads are chunked ≤100 regs
-because Modbus caps a single read at 125. HOLDING registers hold setpoints (CoolSetP
-at HOLDING@1); the dashboard only reads.
-
-**HTTP `getvar.csv`.** The Carel microwebsite exposes every PLC variable —
-`name,id,desc,type,access,val` — at `http://<ip>/getvar.csv` (~4000 rows, ~5 s,
-gzipped). Filtering is exact-name only, but the `name` param repeats:
-`getvar.csv?name=A&name=B` returns just those rows in ~150 ms. That's how the
-dashboard gets the points missing from the TCP map (`WEB_VARS` → `read_web()`).
-Values arrive in engineering units — no ×10. The `id` column is the internal PLC
-variable index, NOT a Modbus address (tested: registers at those addresses are zero).
-
-**Alarm log (`alarms.cgi`).** Reg 0 says *that* the unit is off by alarm (enum 2) but
-never *which*. The names live in the controller's alarm log, which `alarms.htm` renders
-client-side from an undocumented endpoint (found by watching the page's own network
-calls — nothing links to it):
-`alarms.cgi?action=getActive` → `id,name,timestamp`, one row per standing alarm (header
-only when clear); `alarms.cgi?action=getHistory` → `TIME,ID,NAME,EVENT,VAR1,VAR2`,
-newest first, `EVENT` is `Start` or `Stop`, plus the two values that tripped it.
-Timestamps carry a `+00:00` the controller doesn't mean (its clock runs site-local —
-same quirk as the datalogger). `lib/alarms.js` polls both and maps the raw var names
-(`Al_HiW_Temp.Active`) to labels. **This unit's real history is worth knowing:**
-`Al_HiW_Temp` (high glycol temp) trips regularly — several times a week — alongside
-`Al_FreezeCirc1/2`, `Al_OvldComp1Circ1/2` (compressor overload), `Al_PhaseMonitor`
-(supply power) and `Al_LowlvlSensor`.
-
-**Onboard datalogger (`getlog.csv`).** The controller runs one log, `GandDLog04162024`
-(id 0, defined in G&D's application via c.design; not editable from the webkit).
-It samples 24 points every 5 s — glycol in/out/supply temps, suction temps, all
-pressures, comp/fan states, flow — in **metric units** (°C, bar), unlike the ×10-°F
-Modbus map. `getlogids.csv` lists logs; `getlog.csv?id=0&start=…&stop=…`
-(`YYYY-MM-DDThh:mm:ss`) exports CSV. Quirk: rows are stamped `+00:00` but the clock
-runs site-local time — the dashboard parses them as local wall-clock. The log sat
-dead from a 2026-04-15 service visit (`Stop` event) until 2026-07-11: visiting the
-controller's system menu (hold Alarm+Enter 3 s on the pGD or the `/pgd/index.htm`
-virtual display) → LOGGER re-armed it, even though RESTART LOGS claimed "no logs to
-restart". If the chart goes flat, check for a new `Stop` event and repeat that.
-The controller also charts this log itself at `http://<ip>/logger.htm`.
-
-## Register map (confirmed 2026-07-04; extended 2026-07-12, chiller running)
-
-Layout: circuit 1 at 0–33, circuit 2 mirrors it at roughly +32 (a few points sit at
-+31: comp-on 31→62, fan setpoint 32→63, fan output 33→64), glycol block at 68/69/132,
-hour counters from 129. The input map effectively ends at ~171 (167–171 is a packed
-serial/float block). Full map lives in `LABELS` in `lib/modbus.js`:
-
-| INPUT reg | Point                              | reg | Point (circuit 2 mirror)    |
-|-----------|-----------------------------------|-----|------------------------------|
-| 0         | Chiller status (int enum, see below) |  |                              |
-| 1         | Power request (tenths of %)       |     |                              |
-| 2         | Power running c1 (tenths of %)    | 34  | Power running c2             |
-| 3         | Discharge pressure c1 (psi)       | 35  | Discharge pressure c2        |
-| 4         | Condensing temp c1 (°F)           | 36  | Condensing temp c2           |
-| 9         | Suction temp c1 (°F)              | 41  | Suction temp c2              |
-| 10        | Suction pressure c1 (psi)         | 42  | Suction pressure c2          |
-| 11        | Evaporating temp c1 (°F)          | 43  | Evaporating temp c2          |
-| 13        | Circuit 1 status (int enum)       | 45  | Circuit 2 status             |
-| 23        | Suction superheat c1              | 55  | Suction superheat c2         |
-| 24        | Discharge superheat c1 †          | 56  | Discharge superheat c2 †     |
-| 26        | EEV position c1 (%)               | 58  | EEV position c2              |
-| 28        | EVD valve status c1 (int)         | 60  | EVD valve status c2          |
-| 29        | Suction SH setpoint c1 (°F)       | 61  | Suction SH setpoint c2       |
-| 31        | Compressor c1 on (bool)           | 62  | Compressor c2 on             |
-| 32        | Condenser fan setpoint c1 (°F)    | 63  | Condenser fan setpoint c2    |
-| 33        | Fan output c1 (%)                 | 64  | Fan output c2                |
-| 68 / 69   | Glycol outlet / inlet (°F)        | 132 | Glycol reservoir temp (°F)   |
-| 70        | Cooling setpoint (°F)             |     |                              |
-| 94 / 102  | EVD firmware ver / retained-mem writes (diagnostics) | | |
-| 129 / 131 / 135 / 141 / 158 / 160 | Working hours: pump 1, pump 2, comp c1, comp c2, fan c1, fan c2 | | |
-
-† reads ≈ −86: the controller's own sentinel (no discharge temp probes fitted) —
-its web UI shows the same. Regs 5/37 are the matching 32.0 °F (= 0 °C) placeholder
-"discharge temp" — same missing probes.
-
-**Chiller status enum (reg 0, `Modbus_FB.ChillerStat`):** 1=Standby, 2=Off by alarm,
-3=Off by BMS, 4=Off by schedule, 5=Off by DI, 6=Off by keyboard, 9=Running.
-
-**Web-only points** (via `getvar.csv`, see `WEB_VARS` in `lib/webvars.js`): the
-`Modbus_FB.*` block (glycol supply pressure, reservoir level, chiller/process pump
-status, glycol flow A/B, compressor A/B status, fan/EEV — the last two also exist
-on the TCP map at 33/64 and 26/58), plus safety inputs that are on no register:
-`PctLEL_A/B` (propane leak sensors, % of lower explosive limit) and the
-high/low-pressure pressostat digital inputs (`HiP_PstatCirc1_Din.Val`,
-`LowP_PstatCirc1_Din.Val`, 1 = tripped).
-
-## Device findings (2026-07-12, virtual pGD + vars.htm survey)
-
-- **It's an R290 (propane) unit** — deduced from the `PctLEL` leak sensors and
-  confirmed numerically: discharge pressure ↔ condensing temp matches the propane
-  saturation curve exactly (the history chart's Condenser A/B series uses this).
-- **HOLDING registers (FC3) are the config bank**: hold 1 = active cooling setpoint,
-  hold 11–14 = condenser fan control band (86/113/77/95 °F), hold 25/29 = superheat
-  setpoints, plus alarm thresholds. Read-only for us; the dashboard never writes.
-- **Probes that don't exist**: no outside-air sensor (`ExtTemp` reads a flat 32.00
-  with probe min=max — not installed) and no discharge temp probes (same sentinel).
-- **Second setpoint input** (`Active2ndSetPDin`=1, NC logic): present but the
-  alternate 50 °F schedule setpoint is not engaged — the unit runs the primary.
-- **Sonic density sensor** (TZero, for glycol concentration/freeze point) exists in
-  the program but is disabled and errored (`EnSensor`=0, `DeviceError`=1) — the pGD's
-  "Mixture 0.0% / Freeze Pt −40 °F" screen shows defaults, not measurements.
-- **Enable interlocks** are individually readable (`Modbus_FB.ChillerEnByKeyboard/
-  Sw/Sched/BMS`) if "why is it off" ever needs more than the reg-0 enum.
-- The virtual pGD at `http://<ip>/pgd/index.htm` mirrors the physical display —
-  info screens are read-only and safe to browse; Esc backs out.
-- The dashboard embeds the controller's interactive HTML5 pGD through a same-origin
-  `/pgd/` proxy. This keeps the live display and its controller keys working when the
-  dashboard is served over HTTPS or viewed remotely. Those keys operate the live unit.
-
-## How the map was found (`correlate_registers.py`)
-
-Single-snapshot value matching is unreliable — different sensors routinely read the
-same value at one instant (four of the old labels were wrong that way). The correlator
-instead samples `getvar.csv` and a register dump together, repeatedly, while the
-chiller runs: a register earns a variable's label only if it tracks that variable's
-value (REAL: |var×10 − raw| ≤ 2; ints exact) across **every** sample. Drifting values
-make coincidences die within a few rounds. This is the one remaining Python script (a
-one-off discovery tool; its result is already baked into `LABELS`). Re-run anytime with
-a Python venv that has `pymodbus`:
+For live reload while editing server modules, page markup, or browser scripts:
 
 ```sh
-./.venv/bin/python correlate_registers.py     # ROUNDS/INTERVAL/CHILLER_IP env-tunable
+npm run dev
 ```
 
-Fast-oscillating points (fan, EEV) can't survive the ~2 s skew between the two fetches,
-which is why the correlator missed them: a later time-series diff through the server's
-own `/api/all` (both sources in one payload, no skew) found fan output at 33/64 and
-EEV position at 26/58 after all. Only supply pressure and reservoir level remain
-genuinely web-only.
+Useful checks:
 
-## Network access
+```sh
+npm test
+npm run typecheck
+curl -s http://localhost:8000/api | head -c 80
+```
 
-The site is only reachable via Ubiquiti Teleport (WiFiman), which is hardcoded
-full-tunnel: it installs `0/1` + `128.0/1` half-range routes that swallow the default
-route, killing Claude's API access (and general egress) while connected. It does NOT
-touch DNS, and it pins its own link to the site via a host route — both verified by
-diag capture.
+Production uses Node 20.19.4. Use Node 20.12 or newer so native `fetch`,
+[`process.loadEnvFile()`](https://nodejs.org/api/process.html#processloadenvfilepath),
+and the current dependencies are all available. Runtime dependencies are
+`@slack/bolt`, `modbus-serial`, `three`, and `uplot`; `typescript` and
+`@types/node` are development-only.
 
-**`teleport_split.sh`** exploits that: after Teleport connects, it deletes the two
-half-range routes and adds `192.168.1.0/24` via the tunnel interface. Internet flows
-direct again; only chiller traffic uses the VPN. WiFiman reinstalls its routes on every
-reconnect, so re-run the script each time.
+### Configuration
 
-### Teleport tunnel — anatomy and operation
+The server loads optional `KEY=value` entries from the gitignored `.env` beside
+the code. Environment variables set by the service or shell are also supported.
 
-Teleport is Ubiquiti's zero-config WireGuard VPN (WiFiman app ↔ UniFi gateway). It
-NAT-traverses via UI's cloud brokering, which is why it connects through the site's
-double NAT that plain WireGuard cannot (no port forward needed).
+| Variable | Default | Purpose |
+|---|---:|---|
+| `CHILLER_IP` | `192.168.1.69` | Controller address |
+| `CHILLER_REGS` | `162` | Number of INPUT registers to read: addresses 0–161 |
+| `PORT` | `8000` | Dashboard listen port |
+| `LOG_FILE` | `log_cache.csv` beside the code | Persistent seven-day datalogger cache |
+| `LOG_POLL_MIN` | `5` | Datalogger tail-poll interval in minutes |
+| `SLACK_WEBHOOK_URL` | unset | Enables proactive Slack alerts and the daily summary |
+| `SLACK_APP_TOKEN` | unset | Slack app-level token for Socket Mode commands |
+| `SLACK_BOT_TOKEN` | unset | Slack bot token for `/chiller` commands |
+| `SLACK_DASHBOARD_URL` | unset | Operator-accessible dashboard link appended to Slack responses |
 
-What connecting actually does on the Mac (verified by diag capture, 2026-07-04):
+Slack threshold variables are listed under [Alert behavior](#alert-behavior).
+`DEV=1` is set by `npm run dev` and enables only the live-reload endpoint.
+
+## Production operation
+
+The dashboard has run continuously on an ARMv6 Raspberry Pi since 2026-07-11.
+The host is named `chiller`; `http://chiller.local` works on the site LAN, but
+mDNS does not cross Teleport, so remote operators must use the Pi address or an
+access-controlled public hostname.
+
+The service file is `/etc/systemd/system/chiller.service`:
+
+```ini
+[Unit]
+Description=Chiller dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/home/pi/chiller
+Environment=CHILLER_IP=192.168.1.69
+Environment=PORT=80
+EnvironmentFile=-/home/pi/chiller/.env
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+ExecStart=/usr/local/bin/node chiller_dashboard.js
+Restart=always
+User=pi
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`AmbientCapabilities` lets the unprivileged `pi` user bind port 80. OctoPi's
+HAProxy previously owned that port and is disabled. To restore the OctoPrint UI
+on port 80, re-enable HAProxy and remove the dashboard's port-80 configuration.
+
+Common operator commands:
+
+```sh
+sudo systemctl status chiller
+journalctl -u chiller -n 100 --no-pager
+curl -s localhost/api | head -c 80
+sudo systemctl restart chiller
+```
+
+If the history chart stops advancing, see [Onboard datalogger](#onboard-datalogger).
+If the site cannot be reached from home, see [Network access and
+recovery](#network-access-and-recovery).
+
+### Pi platform notes
+
+- Official Node and NodeSource builds do not cover ARMv6. Production uses the
+  Node 20.19.4 `linux-armv6l` tarball from
+  [unofficial-builds.nodejs.org](https://unofficial-builds.nodejs.org/). Before
+  extracting into `/usr/local`, remove the old
+  `/usr/local/lib/node_modules/npm`; stale nested packages can cause errors such
+  as `Class extends value undefined` or `Minipass is not a constructor`.
+- Verify the tarball with `tar -tJf …` before extracting. Extraction takes
+  5–10 quiet minutes on ARMv6; do not interrupt it.
+- Raspbian Buster is end-of-life. If `apt` returns 404, replace
+  `raspbian.raspberrypi.org` with `legacy.raspbian.org` in
+  `/etc/apt/sources.list`, then run
+  `sudo apt update --allow-releaseinfo-change`.
+
+## Deploying to the Pi
+
+Deploy committed work from a development machine, then update the existing
+checkout on the Pi:
+
+```sh
+cd ~/chiller
+git pull
+npm install                 # only when package.json or package-lock.json changed
+npm test
+sudo systemctl restart chiller
+sudo systemctl status chiller --no-pager
+```
+
+After deployment, verify `curl -s localhost/api | head -c 80`, load the
+dashboard, and inspect recent service logs. A restart can lose the first Modbus
+read while the controller releases the previous process's socket; repeated
+failures are not expected.
+
+## Slack
+
+Slack has three independent features:
+
+| Feature | Required configuration | Behavior |
+|---|---|---|
+| Proactive alerts and recoveries | `SLACK_WEBHOOK_URL` | Polls controller data and posts only state changes |
+| Daily summary | `SLACK_WEBHOOK_URL` | Posts once after `SLACK_DAILY_HOUR` using statistics accumulated in memory |
+| On-demand `/chiller` commands | `SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN` | Uses an outbound Socket Mode connection; no public request URL required |
+
+`SLACK_DASHBOARD_URL` is optional and shared by alerts and commands. Webhook
+reporting can run without Socket Mode, and Socket Mode can run without a webhook.
+
+### Security rules for Slack secrets
+
+Slack secrets belong only in `/home/pi/chiller/.env`, which is gitignored. Never
+put a webhook URL, `xapp` token, or `xoxb` token in source, sample values, shell
+history, logs, commits, pull requests, tickets, or chat. Redact them before
+sharing diagnostics. If one is exposed, revoke or rotate it in Slack immediately.
+
+### Slack app and token setup
+
+1. At [Slack API: Your Apps](https://api.slack.com/apps), create an app **from a
+   manifest** and supply `slack-manifest.yml`. For an existing app, confirm that
+   [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/) is
+   enabled, the `/chiller` slash command exists, and the bot has the `commands`
+   scope.
+2. Open **Basic Information → App-Level Tokens** and generate a token with
+   `connections:write`. Copy the resulting `xapp` token directly into the
+   `SLACK_APP_TOKEN` entry in the Pi's `.env`.
+3. Open **OAuth & Permissions**, install or reinstall the app to the workspace,
+   then copy **OAuth Tokens for Your Workspace → Bot User OAuth Token**. Put the
+   resulting `xoxb` token directly in `SLACK_BOT_TOKEN` in `.env`.
+4. For alerts, enable [**Incoming Webhooks**](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/),
+   add a webhook to the desired channel, and put its URL directly in
+   `SLACK_WEBHOOK_URL` in `.env`.
+5. Install dependencies, restart the service, and verify startup:
+
+   ```sh
+   cd ~/chiller
+   npm install
+   sudo systemctl restart chiller
+   journalctl -u chiller -n 100 --no-pager
+   ```
+
+The actual `.env` values are intentionally omitted here. A healthy Socket Mode
+startup logs `Slack /chiller command listening over Socket Mode`. In Slack, run
+`/chiller status`, then `/chiller help`. Verify webhook delivery from Slack's
+Incoming Webhooks configuration and watch the service log for delivery errors;
+do not paste the webhook URL into a command line.
+
+### Command reference
+
+| Command | Response |
+|---|---|
+| `/chiller status` | Glycol loop, setpoint, demand, compressors, pumps/flow, gas sensors, and active alarms |
+| `/chiller alarms` | Standing alarms and up to eight recent faults |
+| `/chiller trend 6h` | Glycol minimum, maximum, average, and direction; accepts `6h`, `24h`, or `7d` |
+| `/chiller circuit a` | Suction/discharge, evaporating/condensing, superheat, EEV, fan, and load for circuit A or B |
+| `/chiller runtimes` | Pump, compressor, and condenser-fan hours |
+| `/chiller why` | Abnormal facts visible in the current snapshot; not a root-cause diagnosis |
+| `/chiller help` | Command reference; any unrecognized command also shows help |
+
+Replies are private to the requester by default. Add `share` anywhere in the
+arguments to post the response in the channel, for example `/chiller status
+share`. Commands are intentionally read-only: there are no setpoint, reset,
+pump, compressor, or other control actions.
+
+### Alert behavior
+
+The alert loop polls every `SLACK_POLL_MIN` minutes and is edge-triggered. It
+posts once when a condition becomes active and once when it clears, including
+the incident duration. Persistent conditions stay quiet. Failed deliveries are
+kept in an ordered in-memory queue and retried on the next poll; later events do
+not leapfrog them. A failed source read is treated as unknown, never as proof
+that an incident recovered.
+
+| Condition | Default threshold | Persistence before alert |
+|---|---:|---:|
+| Controller alarm | Any standing named fault | Immediate |
+| Propane leak | `SLACK_LEL_PCT=10` percent of LEL | Immediate |
+| Leak sensor missing | Point absent from a successful web-variable read | 2 polls |
+| High/low pressostat trip | Mechanical switch tripped | Immediate |
+| Critical glycol outlet | `SLACK_CRIT_F=45` °F | `SLACK_DWELL_MIN=5` min |
+| High glycol outlet | `SLACK_HIGH_F=5` °F above setpoint | `SLACK_DWELL_MIN=5` min |
+| Glycol freeze floor | Below `SLACK_FREEZE_F=20` °F | 5 min |
+| No flow | Pump running while its flow switch reports no flow | 2 min |
+| Not cooling | Compressor running off setpoint without a falling outlet trend | `SLACK_NOTCOOL_MIN=20` min |
+| Runtime imbalance | Compressor-hour difference over `SLACK_IMBALANCE_H=100` h | Immediate |
+| Controller offline | Modbus read fails | 2 polls |
+
+Temperature alerts clear only after moving `SLACK_HYST_F=2` °F back inside the
+threshold. Propane alerts clear below half their trip point. The daily summary
+runs after `SLACK_DAILY_HOUR=8` in the Pi's local time and includes outlet
+minimum/maximum/average, inlet average, current setpoint and reservoir
+temperature, compressor hours, and alarms observed during the window. Its
+accumulator resets on service restart and the message states the actual window.
+
+### Slack troubleshooting
+
+- **Slack says “app did not respond.”** Confirm the service is running and the
+  log contains the Socket Mode listening message. Check that Socket Mode and the
+  `/chiller` command are enabled in the same installed app, then verify outbound
+  internet access from the Pi.
+- **Tokens are missing or mismatched.** When exactly one Socket Mode token is
+  present, the service logs `Slack commands disabled: set both ...`. If neither
+  is present, commands are intentionally disabled without a log message. Copy
+  each token again from its exact Slack location, update only `.env`, and restart.
+- **The app was changed but commands still fail.** Reinstall the app to the
+  workspace after manifest or OAuth-scope changes, then restart the service.
+- **A stale process owns the connection or controller socket.** Run
+  `pgrep -af chiller_dashboard.js` and `systemctl status chiller`. Stop any
+  separately launched development copy, then restart the systemd service. Do
+  not run a second production instance.
+- **Webhook alerts do not arrive.** Confirm Incoming Webhooks remains enabled
+  and assigned to the intended channel. Look for `slack post failed:` followed
+  by an HTTP status or network error. Failed edges remain queued for retry.
+- **Socket Mode disconnects.** Search the journal for `Slack Socket Mode error:`.
+  Confirm the Pi has outbound DNS/HTTPS access, then restart the service.
+- **More context is needed.** Use
+  `journalctl -u chiller -n 200 --no-pager`; redact every secret before sharing
+  output. The implementation does not intentionally log token values.
+
+## HTTP interface
+
+The application uses `node:http` with no web framework. API responses are
+unauthenticated and are intended for trusted or access-controlled networks.
+
+| Route | Response |
+|---|---|
+| `/` | Dashboard HTML: live 3D unit, safety state, glycol history, alarms, and virtual-controller entry point |
+| `/api` | JSON map of raw INPUT registers 0–161: `{address: uint16}` |
+| `/api/web` | JSON map of 16 filtered `getvar.csv` points in engineering units |
+| `/api/all` | Combined `{"regs": ..., "web": ...}` payload used by the five-second refresh loop |
+| `/api/alarms` | `{"active": [{name, since}], "recent": [{name, at, cleared}]}` |
+| `/api/log?start=…&stop=…` | Cached CSV slice; timestamps must be `YYYY-MM-DDThh:mm:ss` |
+| `/pgd/*` | Narrow reverse proxy to the controller's live HTML5 pGD interface |
+| `/datetime.js`, `/app.js`, `/unit3d.js`, `/logo.svg` | Shared date/time formatter, dashboard scripts, and G&D seal artwork |
+| `/uplot.js`, `/uplot.css` | Locally served uPlot assets; no CDN |
+| `/three.js`, `/three.core.min.js`, `/three/addons/*` | Locally served three.js module and postprocessing dependencies |
+| `/reload` | Development-only server-sent event stream used by `npm run dev` |
+
+### Dashboard behavior
+
+The main view refreshes live data every five seconds and alarm history every 60
+seconds. It shows glycol inlet/outlet/setpoint/reservoir values, demand,
+refrigeration-loop readings, pumps and flow, LEL sensors, pressostats, compressor
+and fan state, runtimes, and controller alarms. Circuit A is blue and circuit B
+green throughout. Failed refreshes dim stale readings and mark the page offline.
+
+The history chart offers 6 h, 24 h, and 7 d ranges. It plots glycol inlet and
+outlet, the current setpoint as a reference line, compressor run strips, and
+condensing temperatures derived from logged R290 discharge pressure. Because
+the datalogger has no setpoint column, the setpoint line is current rather than
+historical. `X-Log-Loading: 1` tells clients that the cache is still backfilling.
+
+Clicking the modeled control box opens the live pGD through `/pgd/`. Its keys
+operate the real controller. Browsing information screens is safe; use Esc to
+back out, and do not change settings unless explicitly authorized.
+
+## Architecture and data sources
+
+### Modbus TCP
+
+`lib/modbus.js` reads function-code 4 INPUT registers in chunks of at most 100
+(the protocol limit is 125). `CHILLER_REGS=162` reads addresses 0–161. Analog
+values are signed 16-bit integers scaled by ten: raw `2448` is `244.8 psi`, and
+negative values wrap through `uint16`; `scale()` handles that conversion.
+Statuses, percentages represented in tenths, booleans, and hour counters are
+interpreted according to `LABELS` rather than blindly scaled.
+
+HOLDING registers contain configuration, including the active cooling setpoint
+at address 1. The dashboard never writes them; its live setpoint comes from the
+read-only INPUT map at address 70.
+
+### Controller web variables
+
+The controller's `getvar.csv` contains roughly 4,000 PLC variables in
+`name,id,desc,type,access,val` rows. Repeating the `name` query parameter returns
+only requested variables in about 150 ms, rather than downloading the full
+five-second export. `WEB_VARS` in `lib/webvars.js` selects 15 live values and
+`readWeb()` returns `{label: value}` in engineering units, with no ×10 scaling.
+The CSV `id` is an internal PLC variable index, not a Modbus address.
+
+The selected points cover fan and EEV values, glycol supply pressure, pumps,
+circuit flow, compressor state, propane LEL sensors, and the high/low mechanical
+pressostats. `UNUSED_WEB_VARS` keeps `Modbus_FB.ResLvl` by name only: this unit
+has no reservoir level sensor, so the controller's constant zero is never
+fetched, displayed, or used for Slack soft alerts. Fan and EEV values also exist
+in the TCP map; supply pressure and the safety points do not.
+
+### Alarm log
+
+Register 0 can say that the machine is off by alarm but cannot name the fault.
+`lib/alarms.js` polls two undocumented endpoints used by the controller's own
+`alarms.htm` page:
+
+- `alarms.cgi?action=getActive` returns standing alarms.
+- `alarms.cgi?action=getHistory` returns Start/Stop events, newest first.
+
+The module folds events into named incidents. The controller retains only about
+50 events, so an old Start whose Stop has aged out is shown with unknown duration
+rather than incorrectly marked active. Timestamps include `+00:00`, but the
+controller clock actually runs in site-local time.
+
+Human-facing timestamps share `lib/datetime.js` across the dashboard and Slack.
+Absolute moments use `Jul 13, 2026 at 4:56 AM`; same-day ranges use
+`Jul 13, 2026 · 4:56–10:54 AM`; cross-day ranges repeat both dates; and elapsed
+times use at most two useful units, such as `6 hr 55 min`. Relative time may add
+context but does not replace the absolute timestamp. ISO timestamps remain only
+in machine-facing JSON, CSV, and controller query parameters.
+
+Observed faults include high glycol temperature, freeze protection for both
+circuits, compressor overload, phase monitor, low reservoir level, EEV driver
+offline, and loss of flow.
+
+### Onboard datalogger
+
+The controller log `GandDLog04162024` (id 0) samples 24 values every five seconds
+in metric units (°C and bar). `getlog.csv?id=0&start=…&stop=…` takes roughly a
+minute per request, so `/api/log` never queries it synchronously. `lib/logcache.js`
+keeps seven days in memory, persists them to gitignored `log_cache.csv`, backfills
+six-hour chunks newest-first, then polls the tail every `LOG_POLL_MIN` minutes.
+
+The datalogger timestamps also claim `+00:00` while representing local wall
+time. The code parses their first 19 characters as local time. The controller
+clock was about 25 minutes fast on 2026-07-11, so the cache queries with a
+one-hour future pad.
+
+The log stopped after a 2026-04-15 service visit and was re-armed on 2026-07-11.
+If charts go flat, open the physical pGD or `/pgd/index.htm`, hold Alarm+Enter
+for three seconds, enter **LOGGER**, and re-arm the log. **RESTART LOGS** may say
+that no logs need restarting even when this is required. The controller's own
+chart is at `http://<controller>/logger.htm`.
+
+## Hardware reference
+
+### Machine and glycol loop
+
+The G&D unit is a 93.9 W × 48.2 D × 66.4 H in air-cooled packaged chiller with
+two independent R290 refrigeration circuits, a glycol reservoir, chiller and
+process pumps, and a Carel c.pCO PLC. The chiller never contacts beer. It cools
+an inhibited propylene-glycol/water mixture circulated through fermenter and
+brite-tank jackets.
+
+Warm return glycol is inlet register 69. It collects in the reservoir (register
+132 plus a web-only level), passes through the evaporators, and leaves as chilled
+supply at register 68. Register 70 is the cooling setpoint. The temperature
+difference, inlet minus outlet, is the heat removed from the loop. Flow switches
+protect each evaporator: a compressor running without flow could freeze and
+rupture it, so the controller locks the circuit out.
+
+Per circuit, compressors raise refrigerant pressure and temperature; the rear
+condenser and fans reject heat; an electronic expansion valve drops liquid to
+the low side; and the evaporator boils refrigerant while absorbing glycol heat.
+The valve trims suction superheat to avoid liquid slugging without starving the
+evaporator. The c.pCO compares glycol supply temperature with the setpoint,
+computes cooling demand, and stages the circuits. All dashboard access is
+read-only.
+
+### 3D model specification
+
+`public/unit3d.js` contains a hand-built three.js model. Its opening **TWEAK MAP**
+documents axes, landmarks, and adjustable geometry. One model unit is about
+0.391 in; the 240 × 170 × 123 model matches the cabinet's 93.9 × 66.4 × 48.2 in
+width, height, and depth. `+z` is front and `+x` is the control-box end.
+
+| Part | Geometry and placement |
+|---|---|
+| Shell and base | Glossy white shell, black trim and 244 × 12 × 127 base rail |
+| Front | Two doors with ten louvers each, center post, corner posts, and two G&D seal medallions |
+| Compressors | Two 18 × 39 cylinders behind the louvers; A blue, B green; emissive while running |
+| Control box | 6 × 53 × 42 box at `(122, 50, 0)`; click target for the live pGD |
+| Glycol stubs | Supply above return on the left end at `(-124, -14/-37, 15)` |
+| Reservoir | 70 × 154 × 110 tank at `(-75, 4, -2)` with filler cap at `(-100, 87, -45)` |
+| Condensers | Two 148 × 69 rear screens spanning x = −40…108, with two animated fans each |
+| Reading chips | Six HTML chips projected from `chipAnchors`; far-side chips dim, with safety/runtimes outside the model |
+
+The unit loads front-facing with no automatic turntable; drag rotates it with
+pitch clamped from −30° to 80°. The dormant 36-second tour remains behind the
+`auto` flag. Fan animation is display calibration, not physics: 100% maps to
+2.5 revolutions per second. `prefers-reduced-motion` keeps the same static pose.
+
+Comparison against installation drawings and factory photos on 2026-07-12
+confirmed overall proportions, louvered doors and black framing, seal badges,
+right-end control box, left-end supply-over-return connections, base rail, and
+visible compressors. Known deviations are the missing auxiliary port on the
+blank rear third, missing forklift cutouts in the base rail, and a seal decal on
+only the right end instead of both ends. Earlier finish, badge, louver, bezel,
+and control-box discrepancies have been corrected.
+
+### Device findings
+
+- The refrigerant is R290 (propane), established from the LEL sensors and the
+  exact discharge-pressure/condensing-temperature saturation relationship.
+- FC3 HOLDING registers are the configuration bank. Address 1 is the active
+  cooling setpoint; addresses 11–14 hold the condenser fan band; 25 and 29 hold
+  superheat settings. They are read-only to this project.
+- Outside-air and discharge-temperature probes are not installed. Their flat
+  32 °F or approximately −86 °F values are controller sentinels, not readings.
+- A second-setpoint digital input exists but the alternate 50 °F schedule is not
+  engaged; the unit uses the primary setpoint.
+- The TZero glycol concentration/freeze-point sensor exists in the PLC program
+  but is disabled and errored. The pGD's `0.0%` mixture and `−40 °F` freeze point
+  are defaults, not measurements.
+- Keyboard, switch, schedule, and BMS enable interlocks are individually
+  available in `getvar.csv` if register 0 does not fully explain why the unit is
+  off.
+
+## Register reference
+
+### Confirmed INPUT map
+
+The map was confirmed on 2026-07-04 and extended while the chiller ran on
+2026-07-12. Circuit 1 occupies 0–33; circuit 2 mirrors it at about +32, with
+compressor/fan points at +31. The glycol block is at 68–70 and 132, and runtime
+counters begin at 129. `LABELS` in `lib/modbus.js` is the source of truth.
+
+| Register | Circuit A / shared point | Register | Circuit B mirror |
+|---:|---|---:|---|
+| 0 | Chiller status enum | | |
+| 1 | Cooling demand, tenths of percent | | |
+| 2 | Power running A, tenths of percent | 34 | Power running B |
+| 3 | Discharge pressure A, psi | 35 | Discharge pressure B |
+| 4 | Condensing temperature A, °F | 36 | Condensing temperature B |
+| 9 | Suction temperature A, °F | 41 | Suction temperature B |
+| 10 | Suction pressure A, psi | 42 | Suction pressure B |
+| 11 | Evaporating temperature A, °F | 43 | Evaporating temperature B |
+| 13 | Circuit A status enum | 45 | Circuit B status enum |
+| 23 | Suction superheat A | 55 | Suction superheat B |
+| 24 | Discharge superheat A sentinel | 56 | Discharge superheat B sentinel |
+| 26 | EEV position A, percent | 58 | EEV position B |
+| 28 | EVD status A | 60 | EVD status B |
+| 29 | Suction-superheat setpoint A, °F | 61 | Suction-superheat setpoint B |
+| 31 | Compressor A on | 62 | Compressor B on |
+| 32 | Condenser-fan setpoint A, °F | 63 | Condenser-fan setpoint B |
+| 33 | Fan output A, percent | 64 | Fan output B |
+| 68 / 69 | Glycol outlet / inlet, °F | 132 | Reservoir temperature, °F |
+| 70 | Cooling setpoint, °F | | |
+| 129 / 131 | Pump 1 / pump 2 hours | | |
+| 135 / 141 | Compressor A / B hours | | |
+| 158 / 160 | Condenser-fan A / B hours | | |
+
+Registers 24 and 56 read near −86 °F because discharge-temperature probes are
+not fitted; 5 and 37 are matching 32 °F placeholders. Diagnostic points include
+EVD firmware at 94 and retained-memory writes at 102. A packed serial/float block
+was observed at 167–171, beyond the dashboard's default 0–161 read span.
+
+Chiller status values at register 0 are: `1` standby, `2` off by alarm, `3` off
+by BMS, `4` off by schedule, `5` off by digital input, `6` off by keyboard, and
+`9` running.
+
+### How the map was discovered
+
+Single-snapshot matching produced false labels because unrelated sensors often
+share a value at one instant. `correlate_registers.py` instead samples
+`getvar.csv` and Modbus repeatedly. A REAL variable matches only while
+`|variable × 10 − register| ≤ 2` across every sample; integers must match exactly.
+Drifting readings quickly eliminate coincidences.
+
+Run the one-off Python tool from a virtual environment containing `pymodbus`:
+
+```sh
+./.venv/bin/python correlate_registers.py
+```
+
+`ROUNDS`, `INTERVAL`, and `CHILLER_IP` are configurable through the environment.
+Fast fan and EEV signals were missed because the two requests are about two
+seconds apart. A later time-series comparison through `/api/all` found fan output
+at 33/64 and EEV position at 26/58. `find_registers.py` is the superseded
+single-snapshot approach and remains only as historical reference.
+
+## Network access and recovery
+
+### Teleport split tunnel
+
+The site is reached through Ubiquiti Teleport in WiFiman. Teleport installs
+`0/1` and `128.0/1` routes, which together capture all IPv4 traffic even though
+the ordinary default route remains unchanged. That full tunnel makes the site
+reachable but can break normal internet access.
+
+After Teleport connects, run:
+
+```sh
+./teleport_split.sh
+ping 192.168.1.69
+```
+
+The script finds the `utunN` interface that owns `0/1`, removes both half-range
+routes, and adds `192.168.1.0/24` through that tunnel. Internet traffic then uses
+the home default route. WiFiman reinstalls its routes after every reconnect, so
+rerun the script each time.
+
+Observed tunnel details from 2026-07-04:
 
 | Change | Detail |
-|--------|--------|
-| Tunnel interface | new `utunN`; client addr on `192.168.2.0/24`, tunnel gateway `192.168.2.1` |
-| `0/1` + `128.0/1` routes → `utunN` | the full-tunnel mechanism: together they cover all IPv4 and are more specific than `default`, which is left untouched — `route get default` still shows en0 (this fooled the first version of the script) |
-| Host route `24.3.243.191 → en0` | pins the encrypted transport to the site's public IP via the real interface; this is why deleting the half-range routes doesn't kill the tunnel itself |
-| DNS | untouched — resolvers stay on the home interface |
+|---|---|
+| Tunnel | New `utunN`; client on `192.168.2.0/24`, gateway `192.168.2.1` |
+| Full-tunnel routes | `0/1` and `128.0/1` point to `utunN` |
+| Transport pin | Host route for the site's public endpoint remains on `en0`, preserving the encrypted tunnel after route removal |
+| DNS | Home-interface resolvers remain unchanged |
 
-Consequence when connected raw: every packet (including `api.anthropic.com`) is routed
-into the tunnel, so Claude/most internet dies while the chiller becomes reachable.
+Teleport works through the site's double NAT because UniFi brokers and
+NAT-traverses the connection. Troubleshooting:
 
-`teleport_split.sh` (run AFTER connecting, needs sudo):
-1. Finds the tunnel interface by looking up which `utunN` owns the `0/1` route —
-   errors out with "No 0/1 tunnel route found" if Teleport isn't really connected.
-2. `route delete 0.0.0.0/1` and `128.0.0.0/1` — internet falls back to the untouched
-   `default` via the home LAN.
-3. `route add 192.168.1.0/24 -interface utunN` — only the chiller site rides the tunnel.
+- `No 0/1 tunnel route found` means Teleport is not passing traffic despite the
+  UI state. Fully quit WiFiman, including its menu-bar process, and reconnect. A
+  reboot clears a wedged VPN extension.
+- If internet dies during a session, Teleport probably reconnected and restored
+  the half-range routes. Run `teleport_split.sh` again.
+- Check [UniFi Site Manager](https://unifi.ui.com) without the VPN. If the site
+  console is offline, the local Mac cannot restore reachability.
 
-Routine: connect Teleport in WiFiman → `./teleport_split.sh` → `ping 192.168.1.69`.
-Re-run the script after **every** reconnect; WiFiman reinstalls its routes each time.
+### Abandoned WireGuard path
 
-Troubleshooting:
-- Script says "No 0/1 tunnel route found" → Teleport isn't actually passing traffic,
-  whatever the WiFiman UI claims. Fully quit WiFiman (menu-bar item too) and reconnect;
-  a reboot clears a wedged VPN network-extension.
-- Everything dead mid-session → Teleport reconnected on its own and reinstalled the
-  half-range routes; just run the script again.
-- Check the site itself at [unifi.ui.com](https://unifi.ui.com) (cloud, works without
-  VPN) — if the console is offline, nothing on this Mac will help.
+A UniFi WireGuard server on UDP 51830 (51820 is used by Teleport) and a client
+with `AllowedIPs = 192.168.1.0/24` were configured but cannot handshake. The
+UniFi WAN is `10.1.10.180` behind a Comcast Business gateway at `10.1.10.1`; the
+site has a public address rather than CGNAT, but the required port forward cannot
+currently be added to the Comcast gateway. Revisit this only if Comcast adds the
+forward or the gateway moves to bridge mode. The old client configuration in
+`~/Downloads/Chiller-Tunnel-Chiller-Client.conf` contains a private key and must
+never enter the repository or chat.
 
-### Abandoned: UniFi WireGuard VPN server (reference)
+The remaining long-term network improvement is `cloudflared` plus Cloudflare
+Access in front of the Pi, which would remove the VPN requirement for read-only
+dashboard access.
 
-A WireGuard server on the site gateway (port 51830; 51820 taken by Teleport) with a
-split-tunnel client conf (`AllowedIPs = 192.168.1.0/24`, DNS line removed) worked on
-the client side but can never handshake: the site is double-NATed (UniFi WAN
-10.1.10.180 behind a Comcast Business gateway at 10.1.10.1, public IP 24.3.243.191,
-not CGNAT) and the required UDP 51830 forward can't be added on the Comcast box.
-Revive only if that changes (Comcast Business support can add forwards, or bridge
-mode). Client conf: `~/Downloads/Chiller-Tunnel-Chiller-Client.conf` (private key —
-keep out of the repo).
+## Repository map
 
-### Future
-
-The on-site box now exists (the Pi, above). Remaining step: `cloudflared` +
-Cloudflare Access in front of it would remove the VPN requirement entirely for reads.
-
-## Files
-
-- `chiller_dashboard.js` — entry point: wires the `lib/` modules to `node:http`
-  and re-exports the test surface. No framework.
-- `lib/` — the server, one module per concern: `modbus.js` (`read`, `scale`,
-  `LABELS`), `webvars.js` (`WEB_VARS`, `readWeb`), `logcache.js` (datalogger
-  cache with disk persistence — `readLog`, `logInsert`, `log_cache.csv`),
-  `slack.js` (reporter), `routes.js` (request handler + static assets),
-  `config.js` (`.env` + shared `HOST`).
-- `dashboard.html` — the page markup + CSS; served verbatim at `/`.
-- `public/` — the page's scripts, served as-is: `app.js` (5 s refresh loop and
-  uPlot history chart) and `unit3d.js` (the three.js unit model — glossy-white
-  PBR through a bloom postprocessing chain, fans spun by the render loop at live
-  speed, drag-to-rotate; an ES module the browser loads natively, no bundler —
-  the addon imports resolve through the import map in `dashboard.html`).
-- `package.json` — declares the three dependencies (`modbus-serial`, `uplot`,
-  `three`) and `start`/`test`.
-- `test.js` — offline self-check (scale/sign, CSV row parse, page wiring). `npm test`.
-- `jsconfig.json` — `npm run typecheck` config: `tsc --checkJs` over the server
-  modules (no build step; the Pi never runs any of it).
-- `gd_seal.svg` — G&D Chillers seal (svgo-minified vendor art); served at `/logo.svg`
-  for the page header and the 3D unit's door badges. Required at startup.
-- `CLAUDE.md` — instructions for Claude Code sessions in this repo.
-- `correlate_registers.py` — register↔variable mapper (above); the only Python left.
-- `teleport_split.sh` — Teleport split-tunnel fix (above).
-- `find_registers.py` — superseded single-snapshot matcher; safe to delete.
+- `chiller_dashboard.js` wires the modules into the `node:http` server and
+  starts the log cache, webhook reporter, and Socket Mode listener.
+- `lib/modbus.js` contains `read()`, `scale()`, and the confirmed `LABELS` map.
+- `lib/webvars.js` contains `WEB_VARS` and `readWeb()`.
+- `lib/alarms.js` reads and folds the controller alarm log.
+- `lib/logcache.js` implements datalogger fetch, merge, persistence, and slices.
+- `lib/datetime.js` is the shared Node/browser formatter for human-facing dates,
+  time ranges, and durations.
+- `lib/slack.js` evaluates proactive alerts, queues webhook posts, and builds the
+  daily summary.
+- `lib/slack_commands.js` implements read-only `/chiller` Socket Mode commands.
+- `lib/routes.js` serves APIs, static assets, development reloads, and the pGD
+  proxy.
+- `dashboard.html` is the page markup and CSS. `public/app.js` handles live data,
+  alarms, and history; `public/unit3d.js` renders the model.
+- `slack-manifest.yml` is the reproducible Slack app definition.
+- `gd_seal.svg` is vendor artwork served as `/logo.svg` and used on the model.
+- `test.js` is the offline test suite for parsing, cache behavior, page wiring,
+  Slack condition sequences, webhook retries, summaries, and every command.
+- `jsconfig.json` configures JSDoc type checking; there is no build step.
+- `correlate_registers.py` is the current discovery tool;
+  `find_registers.py` is its superseded predecessor.
+- `teleport_split.sh` repairs the Teleport routing table after each connection.
+- `CLAUDE.md` contains repository-specific assistant instructions.

@@ -375,6 +375,7 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
 
 <!-- the controller keeps ~50 events; this is the whole fault history it will admit to -->
 <details><summary title="Every fault the controller still holds — its log keeps only ~50 events, so older faults (and the Stop half of a Start/Stop pair) fall off the end."><span class="info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></span>Alarm history</summary><table id="alarmlog"></table></details>
+<script src="/datetime.js"></script>
 <script src="/app.js"></script>
 <!-- three.js module resolution for the 3D unit: the postprocessing addons under
      /three/addons/ (served from node_modules/three/examples/jsm by lib/routes.js)
