@@ -244,17 +244,31 @@ const cmdDeps = {
 
   let reply = await commandResponse("", cmdDeps); // empty command defaults to status
   assert.strictEqual(reply.response_type, "ephemeral");
-  assert.ok(reply.text.includes("Chiller online · no active alarms") && reply.text.includes("demand 52.0%"));
+  assert.ok(reply.text.includes("Chiller status — Online") && reply.text.includes("Alarms: none active") &&
+    reply.text.includes("12.0°F drop") && reply.text.includes("52.0% demand"));
   reply = await commandResponse("status share", cmdDeps);
   assert.strictEqual(reply.response_type, "in_channel");
   assert.ok((await commandResponse("alarms", cmdDeps)).text.includes("High glycol temp"));
-  assert.ok((await commandResponse("trend 6h", cmdDeps)).text.includes("39.2°F–41.0°F"));
-  assert.ok((await commandResponse("trend month", cmdDeps)).text.includes("must be `6h`, `24h`, or `7d`"));
-  assert.ok((await commandResponse("circuit a", cmdDeps)).text.includes("suction 30.0 psi"));
-  assert.ok((await commandResponse("circuit b", cmdDeps)).text.includes("discharge 170.0 psi"));
-  assert.ok((await commandResponse("runtimes", cmdDeps)).text.includes("chiller 1200 h"));
+  const trendReply = await commandResponse("trend 6h", cmdDeps);
+  assert.ok(trendReply.text.includes("Supply 39.2–41.0°F") && trendReply.text.includes("Jul 13, 2026 · 1:00–2:00 AM"));
+  assert.ok(!trendReply.text.includes("2026-07-13T"));
+  assert.ok((await commandResponse("trend month", cmdDeps)).text.includes("/chiller trend 6h"));
+  assert.ok((await commandResponse("circuit a", cmdDeps)).text.includes("30.0 psi suction"));
+  assert.ok((await commandResponse("circuit b", cmdDeps)).text.includes("170.0 psi discharge"));
+  assert.ok((await commandResponse("runtimes", cmdDeps)).text.includes("chiller 1,200 h"));
   const whyDeps = { ...cmdDeps, read: async () => ({ ...CMD_REGS, 31: 0, 68: 400 }) };
   assert.ok((await commandResponse("why", whyDeps)).text.includes("neither compressor reports running"));
   assert.ok((await commandResponse("help", cmdDeps)).text.includes("/chiller commands"));
+
+  // All command responses use plain text status labels: no Slack emoji codes,
+  // Unicode pictographs, or raw logger timestamps should leak into the UI.
+  const everyCommand = await Promise.all([
+    "status", "alarms", "trend 6h", "circuit a", "circuit b", "runtimes", "why", "help",
+  ].map(async (command) => (await commandResponse(command, cmdDeps)).text));
+  for (const text of everyCommand) {
+    assert.ok(!/:[a-z][a-z0-9_+-]*:/i.test(text), text);
+    assert.ok(!/\p{Extended_Pictographic}/u.test(text), text);
+    assert.ok(!/\d{4}-\d{2}-\d{2}T/.test(text), text);
+  }
   console.log("ok");
 })().catch((e) => { console.error(e); process.exitCode = 1; });
