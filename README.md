@@ -36,8 +36,8 @@ deviates from the drawings.
 
 ### The 3D unit model — geometry and spec comparison
 
-One hand-built three.js scene (module script at the bottom of `dashboard.html`;
-a TWEAK MAP comment at the top of that script documents the coordinate system,
+One hand-built three.js scene (`public/unit3d.js`, served at `/unit3d.js`;
+a TWEAK MAP comment at the top of that file documents the coordinate system,
 landmark coordinates, and every adjustable knob).
 1 model unit ≈ 0.391 in: the cabinet is 240 × 170 × 123 units = the drawing's
 93.9 W × 66.4 H × 48.2 D in. +z is the front, +x the control-box end.
@@ -48,10 +48,10 @@ landmark coordinates, and every adjustable knob).
 | Base rail | 244×12×127 black box, slightly proud | bottom |
 | Doors | 2 × 10 louver slats (93×8×3, tilted .55 rad), black top band + corner posts (all four cabinet corners), 18-wide center post with recessed slots, flat side bezels | front, z +59.5 |
 | Badges | 3 G&D-seal medallions (r 7 × 3 cylinders, vendor SVG canvas-mapped onto the front cap) | top of each door + centered on the control-box end just below mid-height (120.5, −14, 0) |
-| Compressors | 2 cylinders (r 18 × 39), steel-blue, light up (emissive) while running | behind the louvers, stacked A above B at (60, 20/−44, 36) |
+| Compressors | 2 cylinders (r 18 × 39), colored by circuit (A blue, B green — the `COMP` table, matching `--ckt-a`/`--ckt-b` on the history chart), light up (emissive) while running | behind the louvers, stacked A above B at (60, 20/−44, 36) |
 | Control box | 6×53×42 box | right end, upper third, horizontally centered (122, 50, 0) |
 | Glycol stubs | 2 cylinders (r 7 × 14), supply above return (per the drawing) | left end, (−124, −14/−37, 15) |
-| Reading chips | 8 HTML chips holding every live reading, each pinned to a 3D anchor riding the unit (`chipAnchors`) and reprojected after every render; chips whose anchor faces away dim (`.far`). Pump/flow pills + runtime counters sit in static strips along the scene bottom | glycol out/in at the stubs, demand over the top, reservoir at the filler cap, circuit low sides at the compressors, high sides + fan % at the back zones |
+| Reading chips | 6 HTML chips holding every live reading, each pinned to a 3D anchor riding the unit (`chipAnchors`) and reprojected after every render; chips whose anchor faces away dim (`.far`). One chip per circuit carries the **whole loop** — low side then high side, split by a hairline "low side / high side" rule (they were two chips, front and back, until a circuit read better as one card). Safety + runtime sit in a static column left of the cabinet; pump/flow pills along the scene bottom | glycol out/in at the stubs, demand over the top, reservoir at the filler cap, each full circuit at its compressor |
 | Reservoir | 70×154×110 gray-steel tank (base rail to top skin, full depth to the back panel) + filler cap (r 5) through the top skin | left third, same end as its stubs, (−75, 4, −2); cap (−105, 87, 30) |
 | Condenser zones | 2 see-through mesh screens (148×69, canvas-tiled texture) over real openings in the back skin, stacked A over B, spanning x −40…+108 (hugging the control-box end, per the rear-view drawing); two fans per screen, each 5 curved ring-sector blades on a hub, recessed inside behind it | back, screens z −60, fans z −53 |
 
@@ -146,18 +146,22 @@ npm run dev        # same, plus live reload: saving chiller_dashboard.js or dash
 
 | Route      | Serves                                                                  |
 |------------|-------------------------------------------------------------------------|
-| `/`        | Minimal Linear-inspired page built around the three.js 3D model of the unit (a full-viewport-width strip loading front-facing and static; drag to rotate it by hand), styled after the real G&D cabinet — glossy-white powder-coat PBR panels with environment reflections, black trim, middle column, corner posts and base rail, twin louvered doors with G&D-seal logo badges (a third seal on the right end), control box on the right end (proportions from the install drawing); four condenser fans spin at their live reported speeds behind the back screens, and the two compressors glimpsed through the front louvers light up while running. **Every live reading is a chip pinned to its component on the model** (see "The 3D unit model" above): glycol out (tinted amber above 30 °F, red above 40 °F — the same bands `slackPayload` uses) + setpoint + supply pressure at the supply stub, in + ΔT at the return stub, cooling demand over the top, reservoir temp at the filler cap, each circuit's low side (suction, evaporating, superheat, EEV) at its compressor, each high side (discharge, condensing, fan %) at its condenser zone on the back — spin the unit to read them; far-side chips dim. Pump/flow status dots and runtime counters run along the scene bottom. Below the model: glycol history chart (6 h/24 h/7 d, °F axis, dashed line = current setpoint — the log has no setpoint column, so no history for it; green strips along the bottom mark when each circuit's compressors were running, A above B) and a raw-register table under a disclosure; re-renders in place every 5 s. A failed refresh dims the data and stamps the header "offline · data N min old" |
-| `/api`     | JSON `{addr: raw_uint16}` of INPUT registers 0..159                     |
+| `/`        | Minimal Linear-inspired page built around the three.js 3D model of the unit (a full-viewport-width strip loading front-facing and static; drag to rotate it by hand), styled after the real G&D cabinet — glossy-white powder-coat PBR panels with environment reflections and a threshold-gated bloom pass (only the specular hotspots and the running compressors' glow bleed; the white panels themselves stay white), black trim, middle column, corner posts and base rail, twin louvered doors with G&D-seal logo badges (a third seal on the right end), control box on the right end (proportions from the install drawing); four condenser fans spin at their live reported speeds behind the back screens, and the two compressors glimpsed through the front louvers light up while running. **Every live reading is a chip pinned to its component on the model** (see "The 3D unit model" above): glycol out (tinted amber above 30 °F, red above 40 °F — the same bands `slackPayload` uses) + setpoint + supply pressure at the supply stub, in + ΔT at the return stub, cooling demand over the top, reservoir temp at the filler cap, and one chip per circuit at its compressor carrying that circuit's entire loop — low side (suction, evaporating, superheat, EEV) above high side (discharge, condensing, fan %), split by a hairline rule; far-side chips dim. A **safety column** sits to the left of the cabinet — the propane leak sensors (Gas A/B: green when clear, red with the % of LEL when not; amber if a sensor stops reporting, since a dead leak sensor is itself a fault), the HP/LP mechanical pressure switches (invisible until tripped), and the alarm state: a red card naming any standing alarm, or, when clear, the last fault and when it hit. Pump/flow status dots and runtime counters run along the scene bottom. Below the model: glycol history chart (6 h/24 h/7 d, °F axis, in/out lines under a soft gradient fill, dashed line = current setpoint — the log has no setpoint column, so no history for it). **Circuit A is blue and circuit B green throughout** (`--ckt-a`/`--ckt-b`), the same pair that paints the two compressors on the 3D model, so a circuit looks the same wherever you meet it: strips along the chart bottom mark when each circuit's compressors were running (A above B), and dotted Condenser A/B lines on their own right-hand °F axis show each circuit's condensing temp, derived from the logged discharge pressure via the R290 saturation curve — the same conversion the controller uses live. Then an **Alarm history** disclosure (every fault the controller still holds — name, when it started, how long it stood; a fault whose Stop has aged out of the controller's ~50-event buffer shows "—" for duration rather than falsely claiming it's still active); re-renders in place every 5 s. A failed refresh dims the data and stamps the header "offline · data N min old" |
+| `/api`     | JSON `{addr: raw_uint16}` of INPUT registers 0..161                     |
 | `/api/web` | JSON `{label: value}` of the 12 web-only points (engineering units)     |
 | `/api/all` | `{"regs": ..., "web": ...}` combined payload the page's refresh loop uses |
+| `/api/alarms` | `{"active": [{name, since}], "recent": [{name, at, cleared}]}` — the controller's alarm log, Start/Stop events folded into one row per fault; polled every 60 s (faults don't need 5 s resolution) |
 | `/api/log` | CSV slice of the onboard datalogger (`?start=&stop=` in `YYYY-MM-DDThh:mm:ss`), served instantly from an in-process cache that also persists to `log_cache.csv` (gitignored; `LOG_FILE` overrides the path) — a restart reloads 7 d instantly and backfills only the gap since the last saved row, instead of re-downloading everything (~15 min). The controller needs ~60 s per `getlog.csv` query (measured), so the backfill fetches 6 h chunks newest-first (each buffered whole, then merged), then polls only the tail every `LOG_POLL_MIN` min (default 5). `X-Log-Loading: 1` header while the backfill runs, which the page shows as an indefinite "backfilling…" indicator |
 | `/uplot.js` `/uplot.css` | [uPlot](https://github.com/leeoniya/uPlot) assets, vendored from `node_modules` (no CDN) |
 | `/three.js` `/three.core.min.js` | [three.js](https://threejs.org) module build for the 3D unit model, vendored from `node_modules` (no CDN; the module imports `./three.core.min.js`, hence the second route) |
+| `/three/addons/*` | three.js addon modules (`node_modules/three/examples/jsm`), read on demand — the postprocessing chain (`EffectComposer`, `RenderPass`, `UnrealBloomPass`, `OutputPass`) the model's bloom needs. They `import ... from "three"`, which the page's import map resolves back to `/three.js`. Only existing `.js` files resolving inside `examples/jsm` are served (no `../` traversal) |
 | `/logo.svg` | G&D Chillers seal (`gd_seal.svg`, svgo-minified vendor art) — the page paints it onto the 3D unit's door badges |
 
 `CHILLER_IP` overrides the target (default 192.168.1.69); `CHILLER_REGS` the read span
 (default 160); `PORT` the listen port (default 8000). Needs Node 18+ (uses native
-`fetch`); dependencies are `modbus-serial`, `uplot` and `three`. Auth is deliberately absent —
+`fetch`); dependencies are `modbus-serial`, `uplot` and `three`. `npm run typecheck`
+runs `tsc` over the JSDoc'd server modules (`jsconfig.json`; dev machines only — the
+Pi can skip the dev deps with `npm install --omit=dev`). Auth is deliberately absent —
 Cloudflare Access is the intended front when exposed.
 
 Env vars can live in a gitignored `.env` next to the code (`KEY=value` lines, loaded
@@ -242,6 +246,20 @@ dashboard gets the points missing from the TCP map (`WEB_VARS` → `read_web()`)
 Values arrive in engineering units — no ×10. The `id` column is the internal PLC
 variable index, NOT a Modbus address (tested: registers at those addresses are zero).
 
+**Alarm log (`alarms.cgi`).** Reg 0 says *that* the unit is off by alarm (enum 2) but
+never *which*. The names live in the controller's alarm log, which `alarms.htm` renders
+client-side from an undocumented endpoint (found by watching the page's own network
+calls — nothing links to it):
+`alarms.cgi?action=getActive` → `id,name,timestamp`, one row per standing alarm (header
+only when clear); `alarms.cgi?action=getHistory` → `TIME,ID,NAME,EVENT,VAR1,VAR2`,
+newest first, `EVENT` is `Start` or `Stop`, plus the two values that tripped it.
+Timestamps carry a `+00:00` the controller doesn't mean (its clock runs site-local —
+same quirk as the datalogger). `lib/alarms.js` polls both and maps the raw var names
+(`Al_HiW_Temp.Active`) to labels. **This unit's real history is worth knowing:**
+`Al_HiW_Temp` (high glycol temp) trips regularly — several times a week — alongside
+`Al_FreezeCirc1/2`, `Al_OvldComp1Circ1/2` (compressor overload), `Al_PhaseMonitor`
+(supply power) and `Al_LowlvlSensor`.
+
 **Onboard datalogger (`getlog.csv`).** The controller runs one log, `GandDLog04162024`
 (id 0, defined in G&D's application via c.design; not editable from the webkit).
 It samples 24 points every 5 s — glycol in/out/supply temps, suction temps, all
@@ -255,33 +273,71 @@ virtual display) → LOGGER re-armed it, even though RESTART LOGS claimed "no lo
 restart". If the chart goes flat, check for a new `Stop` event and repeat that.
 The controller also charts this log itself at `http://<ip>/logger.htm`.
 
-## Register map (confirmed 2026-07-04, chiller running)
+## Register map (confirmed 2026-07-04; extended 2026-07-12, chiller running)
 
-Layout: circuit 1 at 0–28, circuit 2 mirrors it at 32–56, glycol block at 68/69/132,
-hour counters from 131. Full map lives in `LABELS` in `chiller_dashboard.js`:
+Layout: circuit 1 at 0–33, circuit 2 mirrors it at roughly +32 (a few points sit at
++31: comp-on 31→62, fan setpoint 32→63, fan output 33→64), glycol block at 68/69/132,
+hour counters from 129. The input map effectively ends at ~171 (167–171 is a packed
+serial/float block). Full map lives in `LABELS` in `lib/modbus.js`:
 
 | INPUT reg | Point                              | reg | Point (circuit 2 mirror)    |
 |-----------|-----------------------------------|-----|------------------------------|
-| 0         | Chiller status (int enum)         |     |                              |
-| 1         | Power request (tenths of %)       | 2   | Power running circ 1         |
+| 0         | Chiller status (int enum, see below) |  |                              |
+| 1         | Power request (tenths of %)       |     |                              |
+| 2         | Power running c1 (tenths of %)    | 34  | Power running c2             |
 | 3         | Discharge pressure c1 (psi)       | 35  | Discharge pressure c2        |
 | 4         | Condensing temp c1 (°F)           | 36  | Condensing temp c2           |
 | 9         | Suction temp c1 (°F)              | 41  | Suction temp c2              |
 | 10        | Suction pressure c1 (psi)         | 42  | Suction pressure c2          |
 | 11        | Evaporating temp c1 (°F)          | 43  | Evaporating temp c2          |
+| 13        | Circuit 1 status (int enum)       | 45  | Circuit 2 status             |
 | 23        | Suction superheat c1              | 55  | Suction superheat c2         |
 | 24        | Discharge superheat c1 †          | 56  | Discharge superheat c2 †     |
-| 28        | EVD valve status c1 (int)         |     |                              |
+| 26        | EEV position c1 (%)               | 58  | EEV position c2              |
+| 28        | EVD valve status c1 (int)         | 60  | EVD valve status c2          |
+| 29        | Suction SH setpoint c1 (°F)       | 61  | Suction SH setpoint c2       |
+| 31        | Compressor c1 on (bool)           | 62  | Compressor c2 on             |
+| 32        | Condenser fan setpoint c1 (°F)    | 63  | Condenser fan setpoint c2    |
+| 33        | Fan output c1 (%)                 | 64  | Fan output c2                |
 | 68 / 69   | Glycol outlet / inlet (°F)        | 132 | Glycol reservoir temp (°F)   |
 | 70        | Cooling setpoint (°F)             |     |                              |
-| 131 / 135 / 141 / 158 | Working hours: user pump 2, comp 1 c1, comp 1 c2, source fan 1 c1 | | |
+| 94 / 102  | EVD firmware ver / retained-mem writes (diagnostics) | | |
+| 129 / 131 / 135 / 141 / 158 / 160 | Working hours: pump 1, pump 2, comp c1, comp c2, fan c1, fan c2 | | |
 
 † reads ≈ −86: the controller's own sentinel (no discharge temp probes fitted) —
-its web UI shows the same.
+its web UI shows the same. Regs 5/37 are the matching 32.0 °F (= 0 °C) placeholder
+"discharge temp" — same missing probes.
 
-**Web-only points** (`Modbus_FB.*` — the block feeds the serial BMS port and is absent
-from the TCP map): fan speed A/B %, EEV position A/B %, glycol supply pressure,
-reservoir level, chiller/process pump status, glycol flow A/B, compressor A/B status.
+**Chiller status enum (reg 0, `Modbus_FB.ChillerStat`):** 1=Standby, 2=Off by alarm,
+3=Off by BMS, 4=Off by schedule, 5=Off by DI, 6=Off by keyboard, 9=Running.
+
+**Web-only points** (via `getvar.csv`, see `WEB_VARS` in `lib/webvars.js`): the
+`Modbus_FB.*` block (glycol supply pressure, reservoir level, chiller/process pump
+status, glycol flow A/B, compressor A/B status, fan/EEV — the last two also exist
+on the TCP map at 33/64 and 26/58), plus safety inputs that are on no register:
+`PctLEL_A/B` (propane leak sensors, % of lower explosive limit) and the
+high/low-pressure pressostat digital inputs (`HiP_PstatCirc1_Din.Val`,
+`LowP_PstatCirc1_Din.Val`, 1 = tripped).
+
+## Device findings (2026-07-12, virtual pGD + vars.htm survey)
+
+- **It's an R290 (propane) unit** — deduced from the `PctLEL` leak sensors and
+  confirmed numerically: discharge pressure ↔ condensing temp matches the propane
+  saturation curve exactly (the history chart's Condenser A/B series uses this).
+- **HOLDING registers (FC3) are the config bank**: hold 1 = active cooling setpoint,
+  hold 11–14 = condenser fan control band (86/113/77/95 °F), hold 25/29 = superheat
+  setpoints, plus alarm thresholds. Read-only for us; the dashboard never writes.
+- **Probes that don't exist**: no outside-air sensor (`ExtTemp` reads a flat 32.00
+  with probe min=max — not installed) and no discharge temp probes (same sentinel).
+- **Second setpoint input** (`Active2ndSetPDin`=1, NC logic): present but the
+  alternate 50 °F schedule setpoint is not engaged — the unit runs the primary.
+- **Sonic density sensor** (TZero, for glycol concentration/freeze point) exists in
+  the program but is disabled and errored (`EnSensor`=0, `DeviceError`=1) — the pGD's
+  "Mixture 0.0% / Freeze Pt −40 °F" screen shows defaults, not measurements.
+- **Enable interlocks** are individually readable (`Modbus_FB.ChillerEnByKeyboard/
+  Sw/Sched/BMS`) if "why is it off" ever needs more than the reg-0 enum.
+- The virtual pGD at `http://<ip>/pgd/index.htm` mirrors the physical display —
+  info screens are read-only and safe to browse; Esc backs out.
 
 ## How the map was found (`correlate_registers.py`)
 
@@ -298,9 +354,11 @@ a Python venv that has `pymodbus`:
 ./.venv/bin/python correlate_registers.py     # ROUNDS/INTERVAL/CHILLER_IP env-tunable
 ```
 
-Fast-oscillating points (fan, EEV) can't survive the ~2 s skew between the two fetches
-— absence from the correlator's output plus absence from a full 0–1999 dump search
-(×10 and IEEE-float encodings) is how they were proven off-map, not just unfound.
+Fast-oscillating points (fan, EEV) can't survive the ~2 s skew between the two fetches,
+which is why the correlator missed them: a later time-series diff through the server's
+own `/api/all` (both sources in one payload, no skew) found fan output at 33/64 and
+EEV position at 26/58 after all. Only supply pressure and reservoir level remain
+genuinely web-only.
 
 ## Network access
 
@@ -370,17 +428,24 @@ Cloudflare Access in front of it would remove the VPN requirement entirely for r
 
 ## Files
 
-- `chiller_dashboard.js` — the dashboard: Modbus reads (`read`, `scale`, `LABELS`),
-  web-var reads (`WEB_VARS`, `readWeb`), datalogger cache with disk
-  persistence (`readLog`, `logInsert`, `log_cache.csv`), `node:http` routes.
-  No framework.
-- `dashboard.html` — the page (HTML/CSS/client JS), including the uPlot history
-  chart and the three.js unit model (glossy-white PBR, fans spun by the render
-  loop at live speed, drag-to-rotate via pointer events);
-  served verbatim at `/`.
+- `chiller_dashboard.js` — entry point: wires the `lib/` modules to `node:http`
+  and re-exports the test surface. No framework.
+- `lib/` — the server, one module per concern: `modbus.js` (`read`, `scale`,
+  `LABELS`), `webvars.js` (`WEB_VARS`, `readWeb`), `logcache.js` (datalogger
+  cache with disk persistence — `readLog`, `logInsert`, `log_cache.csv`),
+  `slack.js` (reporter), `routes.js` (request handler + static assets),
+  `config.js` (`.env` + shared `HOST`).
+- `dashboard.html` — the page markup + CSS; served verbatim at `/`.
+- `public/` — the page's scripts, served as-is: `app.js` (5 s refresh loop and
+  uPlot history chart) and `unit3d.js` (the three.js unit model — glossy-white
+  PBR through a bloom postprocessing chain, fans spun by the render loop at live
+  speed, drag-to-rotate; an ES module the browser loads natively, no bundler —
+  the addon imports resolve through the import map in `dashboard.html`).
 - `package.json` — declares the three dependencies (`modbus-serial`, `uplot`,
   `three`) and `start`/`test`.
 - `test.js` — offline self-check (scale/sign, CSV row parse, page wiring). `npm test`.
+- `jsconfig.json` — `npm run typecheck` config: `tsc --checkJs` over the server
+  modules (no build step; the Pi never runs any of it).
 - `gd_seal.svg` — G&D Chillers seal (svgo-minified vendor art); served at `/logo.svg`
   for the page header and the 3D unit's door badges. Required at startup.
 - `CLAUDE.md` — instructions for Claude Code sessions in this repo.

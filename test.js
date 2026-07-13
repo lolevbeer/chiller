@@ -12,18 +12,22 @@ const m = row.match(ROW);
 assert.ok(m && m[1] === "Modbus_FB.FanSpA" && parseFloat(m[2]) === 98.4);
 assert.ok(WEB_VARS["Modbus_FB.FanSpA"] === "Fan speed A %");
 
-for (const anchor of ["glyIn", "comp2", "/api/all", "Raw registers"]) {
+// the page's scripts live in public/ (served at /app.js and /unit3d.js)
+const APP = require("node:fs").readFileSync(require("node:path").join(__dirname, "public/app.js"), "utf8");
+const UNIT3D = require("node:fs").readFileSync(require("node:path").join(__dirname, "public/unit3d.js"), "utf8");
+
+// "Raw registers" was an anchor here until the debug table was dropped from the page
+for (const anchor of ["glyIn", "comp2", "/app.js", "/unit3d.js"]) {
   assert.ok(PAGE.includes(anchor), anchor);
 }
 
 // the page scripts must at least parse — a syntax error kills the whole page
 // silently (every function, including tick(), just never exists). vm.Script
-// compiles our own page source without running it. The 3D-unit module script
-// gets the same check; vm.Script is classic-only, so its import line is
-// stripped before compiling.
-new (require("node:vm").Script)(PAGE.match(/<script>([\s\S]*?)<\/script>/)[1]);
-new (require("node:vm").Script)(
-  PAGE.match(/<script type="module">([\s\S]*?)<\/script>/)[1].replace(/^import .*$/m, ""));
+// compiles the source without running it; it's classic-only, so the 3D
+// module's import lines (three + its postprocessing addons) are all stripped
+// before compiling.
+new (require("node:vm").Script)(APP);
+new (require("node:vm").Script)(UNIT3D.replace(/^import .*$/gm, ""));
 
 // /api/log param whitelist: controller date format only, nothing else passes through
 assert.ok(TSTAMP.test("2026-07-11T00:00:00"));
@@ -60,12 +64,20 @@ assert.ok(sliced[0].startsWith("TIME") && sliced[1].includes("5.5") && sliced[2]
 // disk persistence roundtrip: reloading a saved cache file adds nothing new
 assert.strictEqual(logInsert(logSlice(-Infinity, Infinity) + "\n"), 0);
 
-// history chart wiring: uplot assets, section, the log columns the page reads
-// (temps + per-circuit compressor states for the run strips), and the
-// indefinite backfill indicator fed by /api/log's X-Log-Loading header
-for (const anchor of ["/uplot.js", "/api/log", "W_InTempUser", "W_OutTempUser", "ranges",
-                      "Comp1Circ1_Dout.Val", "Comp2Circ2_On", "Comp B",
-                      "histpct", "X-Log-Loading", "/three.js", "unit3d"]) {
+// history chart wiring: uplot assets + section in the page; the log columns the
+// refresh script reads (temps + per-circuit compressor states for the run
+// strips) and the indefinite backfill indicator fed by /api/log's
+// X-Log-Loading header in app.js; the three.js import + bridge in unit3d.js
+for (const anchor of ["/uplot.js", "ranges", "histpct"]) {
   assert.ok(PAGE.includes(anchor), anchor);
+}
+for (const anchor of ["/api/all", "/api/log", "W_InTempUser", "W_OutTempUser",
+                      // register names keep the controller's spelling; UI labels are spelled out
+                      "Comp1Circ1_Dout.Val", "Comp2Circ2_On", "Compressor B",
+                      "X-Log-Loading", "unit3d"]) {
+  assert.ok(APP.includes(anchor), anchor);
+}
+for (const anchor of ["/three.js", "unit3d", "chipAnchors"]) {
+  assert.ok(UNIT3D.includes(anchor), anchor);
 }
 console.log("ok");

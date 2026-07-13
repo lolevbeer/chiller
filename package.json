@@ -6,12 +6,17 @@
   "main": "chiller_dashboard.js",
   "scripts": {
     "start": "node chiller_dashboard.js",
-    "dev": "DEV=1 node --watch-path=chiller_dashboard.js --watch-path=dashboard.html chiller_dashboard.js",
-    "test": "node test.js"
+    "dev": "DEV=1 node --watch-path=chiller_dashboard.js --watch-path=dashboard.html --watch-path=lib --watch-path=public chiller_dashboard.js",
+    "test": "node test.js",
+    "typecheck": "tsc -p jsconfig.json"
   },
   "dependencies": {
     "modbus-serial": "^8.0.17",
     "three": "^0.185.1",
     "uplot": "^1.6.32"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^7.0.2"
   }
 }
