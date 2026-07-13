@@ -251,7 +251,6 @@ that an incident recovered.
 | High glycol outlet | `SLACK_HIGH_F=5` °F above setpoint | `SLACK_DWELL_MIN=5` min |
 | Glycol freeze floor | Below `SLACK_FREEZE_F=20` °F | 5 min |
 | No flow | Pump running while its flow switch reports no flow | 2 min |
-| Low reservoir | Below `SLACK_RES_LVL=20` | 5 min |
 | Not cooling | Compressor running off setpoint without a falling outlet trend | `SLACK_NOTCOOL_MIN=20` min |
 | Runtime imbalance | Compressor-hour difference over `SLACK_IMBALANCE_H=100` h | Immediate |
 | Controller offline | Modbus read fails | 2 polls |
@@ -345,14 +344,16 @@ read-only INPUT map at address 70.
 The controller's `getvar.csv` contains roughly 4,000 PLC variables in
 `name,id,desc,type,access,val` rows. Repeating the `name` query parameter returns
 only requested variables in about 150 ms, rather than downloading the full
-five-second export. `WEB_VARS` in `lib/webvars.js` selects 16 values and
+five-second export. `WEB_VARS` in `lib/webvars.js` selects 15 live values and
 `readWeb()` returns `{label: value}` in engineering units, with no ×10 scaling.
 The CSV `id` is an internal PLC variable index, not a Modbus address.
 
-The selected points cover fan and EEV values, glycol supply pressure and
-reservoir level, pumps, circuit flow, compressor state, propane LEL sensors, and
-the high/low mechanical pressostats. Fan and EEV values also exist in the TCP
-map; supply pressure, reservoir level, and the safety points do not.
+The selected points cover fan and EEV values, glycol supply pressure, pumps,
+circuit flow, compressor state, propane LEL sensors, and the high/low mechanical
+pressostats. `UNUSED_WEB_VARS` keeps `Modbus_FB.ResLvl` by name only: this unit
+has no reservoir level sensor, so the controller's constant zero is never
+fetched, displayed, or used for Slack soft alerts. Fan and EEV values also exist
+in the TCP map; supply pressure and the safety points do not.
 
 ### Alarm log
 

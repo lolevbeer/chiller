@@ -1,7 +1,7 @@
 // Offline self-check for scale/sign logic, getvar.csv row parsing, and page wiring
 // (no device needed).  Run: node test.js
 const assert = require("node:assert");
-const { scale, ROW, WEB_VARS, PAGE, TSTAMP, step, logInsert, logSlice } = require("./chiller_dashboard.js");
+const { scale, ROW, WEB_VARS, UNUSED_WEB_VARS, PAGE, TSTAMP, step, logInsert, logSlice } = require("./chiller_dashboard.js");
 const { post, flushPosts, initialDailyKey } = require("./lib/slack");
 const { commandResponse, trendFromCsv } = require("./lib/slack_commands");
 
@@ -13,6 +13,10 @@ const row = '"Modbus_FB.FanSpA",5676,"Condenser Fan VFD Speed Reference A, commo
 const m = row.match(ROW);
 assert.ok(m && m[1] === "Modbus_FB.FanSpA" && parseFloat(m[2]) === 98.4);
 assert.ok(WEB_VARS["Modbus_FB.FanSpA"] === "Fan speed A %");
+// ResLvl is documented but not live: no sensor on this unit, so it is not in
+// WEB_VARS (would always read 0) and is not a Slack condition.
+assert.ok(UNUSED_WEB_VARS["Modbus_FB.ResLvl"] === "Reservoir level");
+assert.ok(!("Modbus_FB.ResLvl" in WEB_VARS));
 
 // the page's scripts live in public/ (served at /app.js and /unit3d.js)
 const APP = require("node:fs").readFileSync(require("node:path").join(__dirname, "public/app.js"), "utf8");
@@ -39,12 +43,11 @@ for (const bad of ["2026-07-11", "2026-07-11T00:00:00Z", "0;id=1", ""]) {
 
 // Slack alerting is edge-triggered: step() is pure — no clock, no I/O — so drive
 // it through whole incidents with no device. Defaults apply: elapsed-time dwells
-// are glycol/freeze/reservoir 5 min and no-flow 2 min; offline and a missing leak
+// are glycol/freeze 5 min and no-flow 2 min; offline and a missing leak
 // sensor deliberately use two samples; alarms/leaks/pressostats fire at once.
 const WEB_OK = {
   "LEL A %": 0, "LEL B %": 0, "HP pressostat trip": 0, "LP pressostat trip": 0,
   "Chiller pump on": 1, "Process pump on": 1, "Glycol flow A ok": 1, "Glycol flow B ok": 1,
-  "Reservoir level": 80,
 };
 // 28°F out, 29°F setpoint (in band), 40°F return, both compressors off, hours balanced
 const REGS_OK = { 31: 0, 62: 0, 68: 280, 69: 400, 70: 290, 132: 400, 135: 500, 141: 505 };
@@ -124,8 +127,11 @@ assert.deepStrictEqual(
   seq(...rep(3, { ...OK, web: { ...WEB_OK, "Chiller pump on": 0, "Process pump on": 0, "Glycol flow A ok": 0, "Glycol flow B ok": 0 } })).flat(),
   []);
 
-// Reservoir low (5 elapsed min), and runtime imbalance past 100 h
-assert.ok(seq(...rep(6, { ...OK, web: { ...WEB_OK, "Reservoir level": 15 } }))[5][0].includes("Reservoir level low"));
+// Even if something injects a dead ResLvl of 0 into web state, no derived
+// reservoir-low Slack alert exists; Al_LowlvlSensor still uses the alarm path.
+assert.deepStrictEqual(seq(...rep(6, { ...OK, web: { ...WEB_OK, "Reservoir level": 0 } })).flat(), []);
+
+// Runtime imbalance past 100 h
 assert.ok(seq({ ...OK, regs: { ...REGS_OK, 135: 900, 141: 500 } })[0][0].includes("400 h apart"));
 
 // Not cooling: a compressor running 20 min with glycol off setpoint and NOT falling.
