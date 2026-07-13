@@ -159,7 +159,7 @@ npm run dev        # same, plus live reload: saving chiller_dashboard.js or dash
 
 `CHILLER_IP` overrides the target (default 192.168.1.69); `CHILLER_REGS` the read span
 (default 160); `PORT` the listen port (default 8000). Needs Node 18+ (uses native
-`fetch`); dependencies are `modbus-serial`, `uplot` and `three`. `npm run typecheck`
+`fetch`); dependencies are `modbus-serial`, `@slack/bolt`, `uplot` and `three`. `npm run typecheck`
 runs `tsc` over the JSDoc'd server modules (`jsconfig.json`; dev machines only — the
 Pi can skip the dev deps with `npm install --omit=dev`). Auth is deliberately absent —
 Cloudflare Access is the intended front when exposed.
@@ -250,6 +250,47 @@ label a few minutes of readings as a daily window.
 The condition engine (`step()` in `lib/slack.js`) is a pure function of (previous state,
 this poll's readings) → (new state, lines to post), so `test.js` drives it through whole
 sequences — fires once, stays quiet, recovers, dwell resets on a lapse — with no device.
+
+#### On-demand `/chiller` commands
+
+The same Slack app can request live, read-only information from the dashboard over
+**Socket Mode**. The Pi opens an outbound WebSocket to Slack, so this needs neither a
+public request URL nor Cloudflare Tunnel and works behind the site's double NAT. Replies
+are private to the person asking unless the command includes `share`.
+
+| Command | Response |
+|---|---|
+| `/chiller status` | glycol loop, setpoint, demand, compressors, pumps/flow, gas sensors and alarms |
+| `/chiller alarms` | standing alarms and the eight most recent faults |
+| `/chiller trend 6h` | glycol min/max/average and direction; accepts `6h`, `24h`, or `7d` |
+| `/chiller circuit a` | suction/discharge, evaporating/condensing, superheat, EEV, fan and load for A or B |
+| `/chiller runtimes` | pump, compressor and condenser-fan hours |
+| `/chiller why` | abnormal facts visible in the current snapshot, without claiming a root-cause diagnosis |
+| `/chiller help` | command reference |
+
+For example, `/chiller status share` posts the status to the channel; `/chiller status`
+is ephemeral. All commands remain read-only: there are deliberately no setpoint, reset,
+pump, or compressor actions.
+
+Setup:
+
+1. At [api.slack.com/apps](https://api.slack.com/apps), create an app **from a manifest**
+   and paste `slack-manifest.yml`. If using an existing Slack app, apply the same manifest
+   fields instead.
+2. Under **Basic Information → App-Level Tokens**, generate a token with
+   `connections:write`; this is the `xapp-…` token.
+3. Install the app to the workspace and copy its **Bot User OAuth Token** (`xoxb-…`).
+4. Put both secrets in the Pi's gitignored `.env`, then restart the service:
+
+   ```dotenv
+   SLACK_APP_TOKEN=xapp-…
+   SLACK_BOT_TOKEN=xoxb-…
+   SLACK_DASHBOARD_URL=http://chiller.local:8000
+   ```
+
+Socket Mode starts only when both tokens are present. It is independent of
+`SLACK_WEBHOOK_URL`: the existing incoming webhook may continue delivering proactive
+alerts even if commands are disabled, and commands may run without the webhook.
 
 ## On-site host (Raspberry Pi)
 
@@ -511,8 +552,10 @@ Cloudflare Access in front of it would remove the VPN requirement entirely for r
 - `lib/` — the server, one module per concern: `modbus.js` (`read`, `scale`,
   `LABELS`), `webvars.js` (`WEB_VARS`, `readWeb`), `logcache.js` (datalogger
   cache with disk persistence — `readLog`, `logInsert`, `log_cache.csv`),
-  `slack.js` (reporter), `routes.js` (request handler + static assets),
+  `slack.js` (alert reporter), `slack_commands.js` (Socket Mode `/chiller` queries),
+  `routes.js` (request handler + static assets),
   `config.js` (`.env` + shared `HOST`).
+- `slack-manifest.yml` — reproducible Slack app definition for the Socket Mode command.
 - `dashboard.html` — the page markup + CSS; served verbatim at `/`.
 - `public/` — the page's scripts, served as-is: `app.js` (5 s refresh loop and
   uPlot history chart) and `unit3d.js` (the three.js unit model — glossy-white

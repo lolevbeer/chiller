@@ -3,6 +3,7 @@
 const assert = require("node:assert");
 const { scale, ROW, WEB_VARS, PAGE, TSTAMP, slackPayload, step, logInsert, logSlice } = require("./chiller_dashboard.js");
 const { post, flushPosts, initialDailyKey } = require("./lib/slack");
+const { commandResponse, trendFromCsv } = require("./lib/slack_commands");
 
 assert.strictEqual(scale(270), 27.0);
 assert.strictEqual(scale(65516), -2.0); // negative temp wraps correctly
@@ -193,6 +194,33 @@ for (const anchor of ["/three.js", "unit3d", "chipAnchors"]) {
 assert.strictEqual(initialDailyKey(new Date(2026, 6, 13, 7, 0), 8), null);
 assert.strictEqual(initialDailyKey(new Date(2026, 6, 13, 8, 0), 8), "2026-07-13");
 
+// /chiller is rendered entirely from injectable reads. Exercise every command
+// without a Slack connection or controller; Socket Mode is only the transport.
+const CMD_REGS = {
+  ...REGS_OK, 1: 520, 2: 480, 3: 1800, 4: 900, 10: 300, 11: 250, 23: 50, 26: 425, 31: 1, 33: 667,
+  34: 0, 35: 1700, 36: 880, 42: 290, 43: 240, 55: 60, 58: 300, 62: 0, 64: 500,
+  129: 1200, 131: 1100, 135: 500, 141: 505, 158: 800, 160: 810,
+};
+const CMD_ALARMS = {
+  active: [],
+  recent: [{ name: "High glycol temp", at: "2026-07-13T01:00:00", cleared: "2026-07-13T01:12:00" }],
+};
+const TREND_CSV = [
+  'TIME,"W_InTempUser","W_OutTempUser"',
+  "2026-07-13T01:00:00-04:00,10,4",
+  "2026-07-13T02:00:00-04:00,11,5",
+].join("\n");
+const TREND = trendFromCsv(TREND_CSV);
+assert.ok(TREND && TREND.n === 2 && TREND.outMin === 39.2 && TREND.outMax === 41);
+const cmdDeps = {
+  read: async () => CMD_REGS,
+  readWeb: async () => WEB_OK,
+  readAlarms: async () => CMD_ALARMS,
+  logSlice: () => TREND_CSV,
+  logLoading: () => false,
+  now: () => new Date(2026, 6, 13, 3).getTime(),
+};
+
 (async () => {
   // fetch resolves for HTTP failures, so post() must inspect `ok` explicitly.
   assert.strictEqual(await post({}, async () => new Response("no", { status: 503 }), () => {}), false);
@@ -205,5 +233,20 @@ assert.strictEqual(initialDailyKey(new Date(2026, 6, 13, 8, 0), 8), "2026-07-13"
   assert.strictEqual(queue.length, 2);
   assert.strictEqual(await flushPosts(queue, async () => true), true);
   assert.strictEqual(queue.length, 0);
+
+  let reply = await commandResponse("", cmdDeps); // empty command defaults to status
+  assert.strictEqual(reply.response_type, "ephemeral");
+  assert.ok(reply.text.includes("Chiller online · no active alarms") && reply.text.includes("demand 52.0%"));
+  reply = await commandResponse("status share", cmdDeps);
+  assert.strictEqual(reply.response_type, "in_channel");
+  assert.ok((await commandResponse("alarms", cmdDeps)).text.includes("High glycol temp"));
+  assert.ok((await commandResponse("trend 6h", cmdDeps)).text.includes("39.2°F–41.0°F"));
+  assert.ok((await commandResponse("trend month", cmdDeps)).text.includes("must be `6h`, `24h`, or `7d`"));
+  assert.ok((await commandResponse("circuit a", cmdDeps)).text.includes("suction 30.0 psi"));
+  assert.ok((await commandResponse("circuit b", cmdDeps)).text.includes("discharge 170.0 psi"));
+  assert.ok((await commandResponse("runtimes", cmdDeps)).text.includes("chiller 1200 h"));
+  const whyDeps = { ...cmdDeps, read: async () => ({ ...CMD_REGS, 31: 0, 68: 400 }) };
+  assert.ok((await commandResponse("why", whyDeps)).text.includes("neither compressor reports running"));
+  assert.ok((await commandResponse("help", cmdDeps)).text.includes("/chiller commands"));
   console.log("ok");
 })().catch((e) => { console.error(e); process.exitCode = 1; });
