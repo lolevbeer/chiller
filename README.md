@@ -168,13 +168,88 @@ Env vars can live in a gitignored `.env` next to the code (`KEY=value` lines, lo
 natively via `process.loadEnvFile()` — no dotenv). The webhook URL belongs there, not
 in the repo or shell history.
 
-Set `SLACK_WEBHOOK_URL` (a Slack Incoming Webhook) and the dashboard also posts the
-glycol temps — in/out, setpoint, reservoir — every 10 minutes (`SLACK_EVERY_MIN`
-overrides), plus once at startup so a bad webhook fails loudly. Glycol-out colors the
-message bar: green below 30 °F, red above 40 °F, plain between. A failed Modbus read
-posts one warning per outage, then goes quiet until it recovers — except at startup,
-where a failed first read is suppressed (a service restart races the chiller still
-holding the old process's Modbus socket; warning there is pure noise). Unset = off.
+### Slack
+
+Set `SLACK_WEBHOOK_URL` (a Slack Incoming Webhook) and the dashboard alerts the moment
+something goes wrong, and again when it clears. Unset = off, and nothing polls.
+
+It is **edge-triggered**: every `SLACK_POLL_MIN` (default 1) it re-reads the registers,
+the web vars and the alarm log, and compares the conditions holding now against the ones
+that held last poll. A condition that appears posts an alert; one that disappears posts a
+recovery with how long the incident lasted. A condition that merely *persists* posts
+nothing. That is the whole deduplication mechanism — one alert per incident, no cooldown
+table, no dedupe window — and it means a message in the channel always represents a change.
+
+```
+🔴 High glycol supply temperature             ✅ High glycol supply temperature recovered
+43.2°F out, setpoint 40.0°F · 51.8°F return   Incident lasted 18 min
+Compressors A + B running                     37.6°F out, setpoint 40.0°F · 44.1°F return
+Active for 5 min
+Dashboard: http://chiller.local:8000
+```
+
+| Condition | Fires when | Must persist |
+|---|---|---|
+| Controller alarm | any fault standing in the alarm log, by name (`lib/alarms.js`) | — |
+| Propane leak | `PctLEL_A`/`B` ≥ `SLACK_LEL_PCT` (default 10 % of the lower explosive limit) | — |
+| Leak sensor blind | an LEL var stops appearing in `getvar.csv` — a sensor that can't see is itself a fault | 2 polls |
+| Pressostat trip | the HP or LP mechanical switch reads tripped | — |
+| Glycol critical | out > `SLACK_CRIT_F` (default 45 °F) | `SLACK_DWELL_MIN` (5 min) |
+| Glycol high | out > setpoint + `SLACK_HIGH_F` (default 5 °F) | `SLACK_DWELL_MIN` (5 min) |
+| Glycol freezing | out < `SLACK_FREEZE_F` (default 20 °F) | 5 min |
+| No flow | a flow switch reads no-flow while its pump reports running | 2 min |
+| Reservoir low | level < `SLACK_RES_LVL` (default 20) | 5 min |
+| Not cooling | a compressor has run `SLACK_NOTCOOL_MIN` (default 20 min) with glycol off setpoint and **not falling** | — |
+| Runtime imbalance | compressor A/B hours diverge past `SLACK_IMBALANCE_H` (default 100 h) | — |
+| Offline | Modbus reads stop getting through | 2 polls |
+
+Safety conditions (alarms, leaks, pressostats) fire on the first poll — the controller
+has already debounced its own alarms, and a leak is not something to sit on. The noisy
+signals debounce first: glycol runs high through every pulldown, and the flow switches
+chatter at pump start. Every threshold is an env var because the hardware never matches
+the ideal on paper — a leak sensor reads a few percent off, a flow switch has its own lag.
+
+**Hysteresis** stops a value sitting on its threshold from alerting and recovering all
+afternoon: once a temperature band is active it stays active until the reading is
+`SLACK_HYST_F` (default 2 °F) back *inside* the band, not merely a hair under the trip
+point. Glycol-high over a 40 °F setpoint therefore fires above 45 °F and clears below
+43 °F. The leak conditions do the same, holding open until the sensor reads properly clean
+(half the trip point) — the one place chatter would be worst.
+
+**Not cooling** is the condition the controller can't raise: a circuit whose compressor
+runs happily while the glycol goes nowhere looks, to the controller, like a compressor
+doing its job. It's caught by trend instead — the engine keeps a small in-memory buffer of
+recent glycol readings and fires when a compressor has run the full window with the
+temperature off setpoint and no lower than it started. Glycol that *is* falling is just a
+pulldown, and never fires.
+
+`offline` holds one poll for the same reason the old code suppressed its first read: a
+service restart races the chiller still holding the dead process's Modbus socket, so one
+failed read at startup is expected. A failed source read is never treated as a recovery:
+register-backed, web-var-backed, and controller-alarm conditions remain standing until a
+successful read from their own source confirms they cleared. An unknown reading cannot
+produce a false all-clear.
+
+Webhook delivery is acknowledged only on a 2xx response. Failed alert and recovery edges
+stay in an ordered in-memory outbox and retry on the next poll; later edges cannot leapfrog
+them. A failed daily summary similarly retains its accumulated statistics and remains due
+until Slack accepts it.
+
+`SLACK_DASHBOARD_URL`, if set, is linked at the foot of every alert.
+
+Once a day at `SLACK_DAILY_HOUR` (default 8, site-local) it posts a summary: glycol out
+min/max/avg, inlet average, setpoint, reservoir, compressor hours, and every alarm seen in
+the window. The
+stats accumulate in memory from the poll loop itself rather than from the datalogger
+cache, which is °C/bar and lags 5 minutes. A restart resets the accumulator, and the
+summary names the window it actually covers ("since 14:20") instead of claiming a full
+day it doesn't have. A startup before the scheduled hour remains eligible to post that
+day's summary; a startup during or after the hour waits until the next day so it does not
+label a few minutes of readings as a daily window.
+
+The condition engine (`step()` in `lib/slack.js`) is a pure function of (previous state,
+this poll's readings) → (new state, lines to post), so `test.js` drives it through whole
+sequences — fires once, stays quiet, recovers, dwell resets on a lapse — with no device.
 
 ## On-site host (Raspberry Pi)
 
