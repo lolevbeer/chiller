@@ -144,7 +144,10 @@ const SLAT_TILT = .4; // rad (~23°) — the shed angle of the white door slats
 // cabinet shell — the front is open behind the louvers so the compressors show
 box(240, 4, 123, 0, 83, 0, steel);       // top
 box(240, 4, 123, 0, -83, 0, dark);       // bottom
-for (const x of [-118, 118]) box(4, 170, 123, x, 0, 0, steel); // end panels
+box(4, 170, 123, -118, 0, 0, steel);      // end panel, glycol end
+// …and the control-box end. On the real cabinet the pGD display is mounted on
+// this panel, so this is the mesh you click to open it (see openPgd below).
+const pgdPanel = box(4, 170, 123, 118, 0, 0, steel);
 // back panel in five pieces, leaving two real openings (x −40…108, y 8…77 /
 // −69…0) behind the condenser screens so they actually see through
 box(80, 170, 4, -80, 0, -59.5, steel);   // …blank third at the glycol end
@@ -345,21 +348,47 @@ unit3d.changed = () => {
 const DRAG = THREE.MathUtils.degToRad(.5); // rad per px of pointer travel
 const PITCH_MIN = THREE.MathUtils.degToRad(-30), PITCH_MAX = THREE.MathUtils.degToRad(80);
 let auto = false, grab = null; // loads front-facing (yaw 0), tilted by the pitch group only
+let dragged = false; // a drag past SLOP is a rotate, not a click — see pointerup
+const SLOP = 4;      // px of travel before a press stops counting as a click
 host.addEventListener("pointerdown", e => {
   if (compactView.matches && e.target !== renderer.domElement) return;
-  auto = false;
+  auto = false; dragged = false;
   grab = { x: e.clientX, y: e.clientY }; host.setPointerCapture(e.pointerId);
 });
 host.addEventListener("pointermove", e => {
-  if (!grab) return;
+  if (!grab) return void (host.style.cursor = overPgd(e) ? "pointer" : "");
+  if (Math.abs(e.clientX - grab.x) > SLOP || Math.abs(e.clientY - grab.y) > SLOP) dragged = true;
   yawG.rotation.y += (e.clientX - grab.x) * DRAG;
   pitchG.rotation.x = THREE.MathUtils.clamp( // drag down = look from above, same feel as the old CSS model
     pitchG.rotation.x + (e.clientY - grab.y) * DRAG, PITCH_MIN, PITCH_MAX);
   grab = { x: e.clientX, y: e.clientY };
   if (noMotion) render();
 });
-host.addEventListener("pointerup", () => grab = null);
+host.addEventListener("pointerup", e => {
+  if (grab && !dragged && overPgd(e)) openPgd(); // a click on the panel, not a rotate that ended there
+  grab = null;
+});
 host.addEventListener("pointercancel", () => grab = null);
+
+// The pGD is mounted on the control-box end panel of the real cabinet, so that
+// panel is the way into the controller here too: click it and the display opens.
+// Raycast the whole unit and check the FIRST hit is the panel — testing the mesh
+// alone would also fire when the panel is round the back, through the cabinet.
+const ray = new THREE.Raycaster(), ptr = new THREE.Vector2();
+function overPgd(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  if (!r.width || !r.height) return false;
+  ptr.set((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1);
+  ray.setFromCamera(ptr, camera);
+  return ray.intersectObject(unit, true)[0]?.object === pgdPanel;
+}
+function openPgd() {
+  const dlg = document.getElementById("pgdDialog"), frame = document.getElementById("pgdFrame");
+  if (!dlg || !frame) return;
+  if (!frame.src && frame.dataset.src) frame.src = frame.dataset.src; // load on first open only
+  dlg.showModal();
+}
+document.getElementById("pgdClose")?.addEventListener("click", () => document.getElementById("pgdDialog")?.close());
 
 let visible = true; // skip drawing while scrolled offscreen (model tops the page, so this bites when scrolled past it)
 const flush = () => { if (dirty) render(); }; // render() re-checks the gate itself

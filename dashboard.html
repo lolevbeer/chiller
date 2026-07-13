@@ -236,8 +236,21 @@ summary .info { color: var(--mut); flex: none; }
 summary .info svg { display: block; width: 14px; height: 14px; }
 details table { border-collapse: collapse; margin: 10px auto 0; font-size: 12px; }
 details td, details th { padding: 3px 10px; text-align: left; color: var(--mut); }
-.pgd-panel { max-width: 820px; margin-inline: auto; }
-.pgd-panel h2 { margin-bottom: 12px; }
+/* The pGD opens from the 3D unit's control-box end panel — the same place the
+   display sits on the real cabinet (see the pgdPanel raycast in unit3d.js).
+   A native <dialog>, so Esc-to-close, the backdrop and focus trapping are the
+   platform's job, not ours. */
+/* margin:auto centers the modal — the page's `* { margin: 0 }` reset kills the
+   dialog's UA default, which would otherwise pin it to the top-left corner. */
+.pgd-dialog { max-width: 860px; width: calc(100% - 32px); margin: auto; padding: 20px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--card); color: var(--ink); }
+.pgd-dialog::backdrop { background: rgb(0 0 0 / .55); }
+.pgd-dialog .pgd-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.pgd-dialog .pgd-bar h2 { margin: 0; }
+.pgd-dialog .x { margin-left: auto; background: none; border: 0; cursor: pointer;
+  color: var(--dim); font-size: 20px; line-height: 1; padding: 4px 8px; }
+.pgd-dialog .x:hover { color: var(--ink); }
 .pgd-frame { display: block; width: 100%; aspect-ratio: 820 / 450; border: 0;
   background: transparent; }
 footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
@@ -339,11 +352,18 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
   </div>
 </section>
 
-<section class="pgd-panel">
-  <h2>Controller display <span class="cst">pGD · live controls</span></h2>
-  <iframe class="pgd-frame" src="/pgd/webpgd.htm"
-    title="Carel pGD controller display" loading="lazy"></iframe>
-</section>
+<!-- Opened by clicking the unit's control-box end panel (unit3d.js). The iframe
+     has no src until the first open — an always-mounted pGD would sit there
+     polling the controller on every page load for a display nobody asked for.
+     openPgd() in unit3d.js promotes data-src to src once. -->
+<dialog class="pgd-dialog" id="pgdDialog">
+  <div class="pgd-bar">
+    <h2>Controller display <span class="cst">pGD · live controls</span></h2>
+    <button class="x" id="pgdClose" aria-label="Close controller display">&times;</button>
+  </div>
+  <iframe class="pgd-frame" id="pgdFrame" data-src="/pgd/webpgd.htm"
+    title="Carel pGD controller display"></iframe>
+</dialog>
 
 <!-- the controller keeps ~50 events; this is the whole fault history it will admit to -->
 <details><summary title="Every fault the controller still holds — its log keeps only ~50 events, so older faults (and the Stop half of a Start/Stop pair) fall off the end."><span class="info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></span>Alarm history</summary><table id="alarmlog"></table></details>
