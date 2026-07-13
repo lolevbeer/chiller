@@ -3,7 +3,7 @@
 const assert = require("node:assert");
 const { scale, ROW, WEB_VARS, UNUSED_WEB_VARS, PAGE, TSTAMP, step, logInsert, logSlice } = require("./chiller_dashboard.js");
 const { post, flushPosts, initialDailyKey } = require("./lib/slack");
-const { commandResponse, trendFromCsv } = require("./lib/slack_commands");
+const { commandResponse, trendFromCsv, alarmsText } = require("./lib/slack_commands");
 
 assert.strictEqual(scale(270), 27.0);
 assert.strictEqual(scale(65516), -2.0); // negative temp wraps correctly
@@ -200,6 +200,19 @@ const CMD_ALARMS = {
   active: [],
   recent: [{ name: "High glycol temp", at: "2026-07-13T01:00:00", cleared: "2026-07-13T01:12:00" }],
 };
+const FRIENDLY_ALARMS = alarmsText({
+  active: [{ name: "Reservoir low level", since: "2026-07-11T03:26:41-07:00" }],
+  recent: [
+    { name: "Reservoir low level", at: "2026-07-11T03:26:41-07:00", cleared: "2026-07-11T03:29:05-07:00" },
+    { name: "Freeze protection, circuit A", at: "2026-07-11T02:14:44-07:00", cleared: "2026-07-11T02:14:44-07:00" },
+    { name: "High glycol temp", at: "2026-07-10T17:56:29-07:00", cleared: "2026-07-11T00:51:40-07:00" },
+  ],
+});
+assert.ok(FRIENDLY_ALARMS.includes("active since Jul 11, 2026 at 3:26 AM"));
+assert.ok(FRIENDLY_ALARMS.includes("Jul 11, 2026 · 3:26–3:29 AM · lasted 2 min 24 sec"));
+assert.ok(FRIENDLY_ALARMS.includes("Jul 11, 2026 at 2:14 AM · cleared immediately"));
+assert.ok(FRIENDLY_ALARMS.includes("Jul 10, 2026 at 5:56 PM → Jul 11, 2026 at 12:51 AM · lasted 6 hr 55 min"));
+assert.ok(!FRIENDLY_ALARMS.includes("T03:26:41"));
 const TREND_CSV = [
   'TIME,"W_InTempUser","W_OutTempUser"',
   "2026-07-13T01:00:00-04:00,10,4",
