@@ -28,10 +28,8 @@ async function tick() {
   set("glyIn", r(69).toFixed(1)); set("glyOut", r(68).toFixed(1));
   // health tint on the supply temp — same bands the Slack reports use (see slackPayload)
   $("glyOut").className = "t out" + (r(68) > 40 ? " bad" : r(68) > 30 ? " warn" : "");
-  set("setp", r(70).toFixed(1) + " °F"); set("resT", r(132).toFixed(1) + " °F");
-  set("dt", (r(69) - r(68)).toFixed(1) + " °F");
+  set("resT", r(132).toFixed(1) + " °F");
   histSetp = r(70); // feeds the history chart's setpoint reference line
-  set("supP", (w["Glycol supply pres psi"] ?? NaN).toFixed(1) + " psi");
   set("pwr", (d.regs[1] / 10).toFixed(0) + "%");
 
   for (const [n, sfx] of [["1", "A"], ["2", "B"]]) {
@@ -42,7 +40,7 @@ async function tick() {
     const comp = w["Compressor " + sfx + " on"];
     $("comp" + n).className = "dot" + (comp ? " ok" : "");
     unit3d.comps[+n - 1] = !!comp; // 3D unit: compressor lights up while running
-    set("cst" + n, comp ? "· comp running" : "· comp idle");
+    set("cst" + n, comp ? "· running" : "· idle");
     const fan = w["Fan speed " + sfx + " %"] ?? 0, eev = w["EEV position " + sfx + " %"] ?? 0;
     set("fan" + n, fan.toFixed(0) + "%"); $("fanB" + n).style.width = fan + "%";
     unit3d.fans[+n - 1] = fan; // drives the 3D unit's fan animation
@@ -101,8 +99,16 @@ function safety(w, regs) {
   const hrs = (name, a, b) =>
     `<div class="hr"><span>${name}</span><b>${regs[a] ?? "–"}</b><b>${regs[b] ?? "–"}</b></div>`;
 
+  // glycol loop targets, sitting above Safety in the left column: what the
+  // controller is aiming for (CoolSetP, reg 70) and the supply pressure it sees
+  const glycol =
+    `<h3>Glycol</h3>` +
+    `<div class="g" title="Target supply temperature (CoolSetP)"><span>Setpoint</span><b>${S(regs[70] ?? 0).toFixed(1)} °F</b></div>` +
+    `<div class="g"><span>Supply</span><b>${(w["Glycol supply pres psi"] ?? NaN).toFixed(1)} psi</b></div>`;
+
   $("safety").innerHTML =
-    `<h3>Safety</h3>` +
+    glycol +
+    `<h3 class="rt">Safety</h3>` +
     lel("A") + lel("B") +
     trip("HP pressostat trip", "HP switch",
          "High-pressure pressostat opened — refrigerant pressure exceeded the mechanical limit") +
@@ -180,7 +186,9 @@ const pad = n => String(n).padStart(2, "0");
 const tstr = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T` +
                   `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 
-let histBackfilling = false; // true while the server backfill runs (X-Log-Loading header)
+// True while the server backfill runs (X-Log-Loading header). No longer shown as a
+// badge — it only speeds up the poll and words the empty-state message.
+let histBackfilling = false;
 
 async function loadHist(hours) {
   // -> uPlot data [[unix ts], [in °F], [out °F], [circ A run], [circ B run],
@@ -253,7 +261,6 @@ let histSetp = null;
 let histChart, histHours = 6;
 function drawHist(data) {
   const el = $("chart");
-  $("histpct").textContent = histBackfilling ? "backfilling…" : "";
   if (histChart) { histChart.destroy(); histChart = null; }
   if (!data || !data[0].length) {
     el.innerHTML = `<div class="msg">${histBackfilling ? "loading history…" : "no log data for this range"}</div>`;
@@ -278,11 +285,27 @@ function drawHist(data) {
     g.addColorStop(0, hex + "38"); g.addColorStop(1, hex + "00");
     return g;
   };
-  // compressor run strips: stepped bars at the chart bottom on a fixed hidden
-  // scale (A above B), drawn only while running so idle time stays empty.
+  // compressor run strips: one rounded pill per contiguous "on" run, at the chart
+  // bottom on a fixed hidden scale (A above B). Idle time stays empty.
   // Circuit color (--ckt-a/--ckt-b) matches that circuit's compressor in the 3D unit.
-  const strip = (label, ckt) => ({ label, stroke: v(ckt), width: 4, scale: "run",
-    paths: uPlot.paths.stepped({ align: 1 }), points: { show: false },
+  // Drawn as filled roundRects rather than a stepped line: uPlot 1.6 ignores the
+  // series `cap`, so a stroked line ends square no matter what.
+  const H = 6; // pill height in CSS px; the radius is half of it, so the ends are semicircles
+  const pills = (u, si) => {
+    const p = new Path2D(), xs = u.data[0], ys = u.data[si], r = u.ctx.canvas.height / u.height; // r: device px per CSS px
+    // loadHist must emit one constant non-null value per strip; the first one fixes its vertical position.
+    const h = H * r, y = u.valToPos(ys.find(v => v != null) ?? 0, "run", true) - h / 2;
+    for (let i = 0; i < ys.length; i++) {
+      if (ys[i] == null) continue;
+      const s = i;
+      while (i + 1 < ys.length && ys[i + 1] != null) i++;
+      const x0 = u.valToPos(xs[s], "x", true), x1 = u.valToPos(xs[i], "x", true);
+      p.roundRect(x0, y, Math.max(x1 - x0, h), h, h / 2); // min width h: a single-sample run stays a dot, not a sliver
+    }
+    return { fill: p };
+  };
+  const strip = (label, ckt) => ({ label, stroke: v(ckt), fill: v(ckt), width: 0, scale: "run",
+    paths: pills, points: { show: false },
     value: (u, x) => (x == null ? "off" : "on") });
   const IN = v("--hist-in"), OUT = v("--accent");
   histChart = new uPlot({
@@ -291,8 +314,8 @@ function drawHist(data) {
     cursor: { points: { size: 7 }, y: false },
     series: [
       {},
-      { label: "In (return)",  stroke: IN,  width: 2, fill: fade(IN),  value: degF },
-      { label: "Out (supply)", stroke: OUT, width: 2, fill: fade(OUT), value: degF },
+      { label: "Return", stroke: IN,  width: 2, fill: fade(IN),  value: degF },
+      { label: "Supply", stroke: OUT, width: 2, fill: fade(OUT), value: degF },
       strip("Compressor A", "--ckt-a"), strip("Compressor B", "--ckt-b"),
       // condensing temps live ~90–130 °F, far above the glycol lines — their own
       // right-hand scale keeps both readable instead of flattening the glycol detail.

@@ -52,7 +52,7 @@ landmark coordinates, and every adjustable knob).
 | Control box | 6×53×42 box | right end, upper third, horizontally centered (122, 50, 0) |
 | Glycol stubs | 2 cylinders (r 7 × 14), supply above return (per the drawing) | left end, (−124, −14/−37, 15) |
 | Reading chips | 6 HTML chips holding every live reading, each pinned to a 3D anchor riding the unit (`chipAnchors`) and reprojected after every render; chips whose anchor faces away dim (`.far`). One chip per circuit carries the **whole loop** — low side then high side, split by a hairline "low side / high side" rule (they were two chips, front and back, until a circuit read better as one card). Safety + runtime sit in a static column left of the cabinet; pump/flow pills along the scene bottom | glycol out/in at the stubs, demand over the top, reservoir at the filler cap, each full circuit at its compressor |
-| Reservoir | 70×154×110 gray-steel tank (base rail to top skin, full depth to the back panel) + filler cap (r 5) through the top skin | left third, same end as its stubs, (−75, 4, −2); cap (−105, 87, 30) |
+| Reservoir | 70×154×110 gray-steel tank (base rail to top skin, full depth to the back panel) + filler cap (r 5) through the top skin | left third, same end as its stubs, (−75, 4, −2); cap (−100, 87, −45) |
 | Condenser zones | 2 see-through mesh screens (148×69, canvas-tiled texture) over real openings in the back skin, stacked A over B, spanning x −40…+108 (hugging the control-box end, per the rear-view drawing); two fans per screen, each 5 curved ring-sector blades on a hub, recessed inside behind it | back, screens z −60, fans z −53 |
 
 Live bindings: `tick()` fills the chips by element id exactly as it did when they
@@ -151,7 +151,7 @@ npm run dev        # same, plus live reload: saving chiller_dashboard.js or dash
 | `/api/web` | JSON `{label: value}` of the 12 web-only points (engineering units)     |
 | `/api/all` | `{"regs": ..., "web": ...}` combined payload the page's refresh loop uses |
 | `/api/alarms` | `{"active": [{name, since}], "recent": [{name, at, cleared}]}` — the controller's alarm log, Start/Stop events folded into one row per fault; polled every 60 s (faults don't need 5 s resolution) |
-| `/api/log` | CSV slice of the onboard datalogger (`?start=&stop=` in `YYYY-MM-DDThh:mm:ss`), served instantly from an in-process cache that also persists to `log_cache.csv` (gitignored; `LOG_FILE` overrides the path) — a restart reloads 7 d instantly and backfills only the gap since the last saved row, instead of re-downloading everything (~15 min). The controller needs ~60 s per `getlog.csv` query (measured), so the backfill fetches 6 h chunks newest-first (each buffered whole, then merged), then polls only the tail every `LOG_POLL_MIN` min (default 5). `X-Log-Loading: 1` header while the backfill runs, which the page shows as an indefinite "backfilling…" indicator |
+| `/api/log` | CSV slice of the onboard datalogger (`?start=&stop=` in `YYYY-MM-DDThh:mm:ss`), served instantly from an in-process cache that also persists to `log_cache.csv` (gitignored; `LOG_FILE` overrides the path) — a restart reloads 7 d instantly and backfills only the gap since the last saved row, instead of re-downloading everything (~15 min). The controller needs ~60 s per `getlog.csv` query (measured), so the backfill fetches 6 h chunks newest-first (each buffered whole, then merged), then polls only the tail every `LOG_POLL_MIN` min (default 5). `X-Log-Loading: 1` header while the backfill runs; the page no longer badges this, but uses it to poll every 5 s instead of 60 s and to word the empty-chart message ("loading history…" vs "no log data for this range") |
 | `/uplot.js` `/uplot.css` | [uPlot](https://github.com/leeoniya/uPlot) assets, vendored from `node_modules` (no CDN) |
 | `/three.js` `/three.core.min.js` | [three.js](https://threejs.org) module build for the 3D unit model, vendored from `node_modules` (no CDN; the module imports `./three.core.min.js`, hence the second route) |
 | `/three/addons/*` | three.js addon modules (`node_modules/three/examples/jsm`), read on demand — the postprocessing chain (`EffectComposer`, `RenderPass`, `UnrealBloomPass`, `OutputPass`) the model's bloom needs. They `import ... from "three"`, which the page's import map resolves back to `/three.js`. Only existing `.js` files resolving inside `examples/jsm` are served (no `../` traversal) |
@@ -338,6 +338,9 @@ high/low-pressure pressostat digital inputs (`HiP_PstatCirc1_Din.Val`,
   Sw/Sched/BMS`) if "why is it off" ever needs more than the reg-0 enum.
 - The virtual pGD at `http://<ip>/pgd/index.htm` mirrors the physical display —
   info screens are read-only and safe to browse; Esc backs out.
+- The dashboard embeds the controller's interactive HTML5 pGD through a same-origin
+  `/pgd/` proxy. This keeps the live display and its controller keys working when the
+  dashboard is served over HTTPS or viewed remotely. Those keys operate the live unit.
 
 ## How the map was found (`correlate_registers.py`)
 

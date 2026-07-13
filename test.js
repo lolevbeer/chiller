@@ -66,9 +66,10 @@ assert.strictEqual(logInsert(logSlice(-Infinity, Infinity) + "\n"), 0);
 
 // history chart wiring: uplot assets + section in the page; the log columns the
 // refresh script reads (temps + per-circuit compressor states for the run
-// strips) and the indefinite backfill indicator fed by /api/log's
-// X-Log-Loading header in app.js; the three.js import + bridge in unit3d.js
-for (const anchor of ["/uplot.js", "ranges", "histpct"]) {
+// strips). /api/log's X-Log-Loading header no longer drives a visible badge — it
+// only speeds the poll and words the empty state — so app.js still anchors it but
+// the page has nothing to show. Plus the three.js import + bridge in unit3d.js.
+for (const anchor of ["/uplot.js", "ranges"]) {
   assert.ok(PAGE.includes(anchor), anchor);
 }
 for (const anchor of ["/api/all", "/api/log", "W_InTempUser", "W_OutTempUser",
