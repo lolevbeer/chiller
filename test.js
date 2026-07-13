@@ -1,7 +1,7 @@
 // Offline self-check for scale/sign logic, getvar.csv row parsing, and page wiring
 // (no device needed).  Run: node test.js
 const assert = require("node:assert");
-const { scale, ROW, WEB_VARS, PAGE, TSTAMP, slackPayload, step, logInsert, logSlice } = require("./chiller_dashboard.js");
+const { scale, ROW, WEB_VARS, PAGE, TSTAMP, step, logInsert, logSlice } = require("./chiller_dashboard.js");
 const { post, flushPosts, initialDailyKey } = require("./lib/slack");
 const { commandResponse, trendFromCsv } = require("./lib/slack_commands");
 
@@ -36,17 +36,6 @@ assert.ok(TSTAMP.test("2026-07-11T00:00:00"));
 for (const bad of ["2026-07-11", "2026-07-11T00:00:00Z", "0;id=1", ""]) {
   assert.ok(!TSTAMP.test(bad), bad);
 }
-
-// Slack payload: glycol-out picks the color — green <30°F, red >40°F, plain between;
-// x10 registers scale into one-decimal °F (negative wrap included)
-const cold = slackPayload({ 68: 271, 69: 442, 70: 400, 132: 65516 });
-assert.strictEqual(cold.attachments[0].color, "good");
-assert.strictEqual(
-  cold.attachments[0].text,
-  "Glycol 44.2°F in → 27.1°F out · setpoint 40°F · reservoir -2°F"
-);
-assert.strictEqual(slackPayload({ 68: 401, 69: 442, 70: 400, 132: 413 }).attachments[0].color, "danger");
-assert.ok(slackPayload({ 68: 351, 69: 442, 70: 400, 132: 413 }).text.includes("35.1°F out")); // no attachment in band
 
 // Slack alerting is edge-triggered: step() is pure — no clock, no I/O — so drive
 // it through whole incidents with no device. Defaults apply: elapsed-time dwells

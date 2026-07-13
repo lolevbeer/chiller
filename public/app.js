@@ -26,7 +26,7 @@ async function tick() {
   $("stat").className = grade === "ok" ? "" : grade; // text echoes the dot so alarms read at a glance
 
   set("glyIn", r(69).toFixed(1)); set("glyOut", r(68).toFixed(1));
-  // health tint on the supply temp — same bands the Slack reports use (see slackPayload)
+  // health tint on the supply temp — amber above 30 °F, red above 40 °F
   $("glyOut").className = "t out" + (r(68) > 40 ? " bad" : r(68) > 30 ? " warn" : "");
   set("resT", r(132).toFixed(1) + " °F");
   histSetp = r(70); // feeds the history chart's setpoint reference line

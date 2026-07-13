@@ -10,7 +10,7 @@ const { HOST } = require("./lib/config"); // also loads .env before anything rea
 const { scale, read, LABELS } = require("./lib/modbus");
 const { readWeb, WEB_VARS, ROW } = require("./lib/webvars");
 const { readLog, TSTAMP, logInsert, logSlice, logLoop } = require("./lib/logcache");
-const { slackPayload, step, startSlack } = require("./lib/slack");
+const { step, startSlack } = require("./lib/slack");
 const { startSlackCommands } = require("./lib/slack_commands");
 const { handle, PAGE } = require("./lib/routes");
 
@@ -36,4 +36,4 @@ if (require.main === module) {
   logLoop().catch((e) => { console.error("log loop crashed:", e); process.exit(1); });
 }
 
-module.exports = { scale, read, readWeb, readLog, TSTAMP, LABELS, WEB_VARS, ROW, PAGE, slackPayload, step, logInsert, logSlice };
+module.exports = { scale, read, readWeb, readLog, TSTAMP, LABELS, WEB_VARS, ROW, PAGE, step, logInsert, logSlice };
