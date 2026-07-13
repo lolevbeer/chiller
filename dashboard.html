@@ -222,9 +222,9 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
 </header>
 
 <!-- All live readings are chips pinned to the 3D unit (see chipAnchors in the
-     module script): glycol at the supply/return stubs, low side on each
-     compressor, high side + fan on each condenser zone (back), reservoir at
-     the tank, pump/flow pills and runtime along the bottom of the scene.
+     module script): glycol temperatures at the supply/return stubs, each full
+     refrigerant circuit at its compressor, reservoir at the tank, and cooling
+     demand over the top. Pump/flow status stays along the bottom of the scene.
      tick() fills them by id exactly as it did when they were side panels. -->
 <section id="hist">
   <!-- no title: the chart speaks for itself. The h2 stays as the header row that

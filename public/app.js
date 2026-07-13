@@ -293,6 +293,7 @@ function drawHist(data) {
   const H = 6; // pill height in CSS px; the radius is half of it, so the ends are semicircles
   const pills = (u, si) => {
     const p = new Path2D(), xs = u.data[0], ys = u.data[si], r = u.ctx.canvas.height / u.height; // r: device px per CSS px
+    // loadHist must emit one constant non-null value per strip; the first one fixes its vertical position.
     const h = H * r, y = u.valToPos(ys.find(v => v != null) ?? 0, "run", true) - h / 2;
     for (let i = 0; i < ys.length; i++) {
       if (ys[i] == null) continue;

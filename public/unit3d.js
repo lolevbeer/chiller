@@ -132,11 +132,10 @@ pitchG.rotation.x = 0; // dead-on front view on load — no downward tilt (drag 
 const box = (w, h, d, x, y, z, mat) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
   m.position.set(x, y, z); unit.add(m); return m; };
 
-// the louver ladder: one pitch, blade thickness and tilt drive BOTH the white
-// door slats and the black separator's blades, so the two can't drift apart —
-// the openings line up row for row across the whole front face.
+// the louver ladder: one pitch and blade thickness drive both the white door
+// slats and the black separator's flat blades, so the openings stay aligned.
 const SLAT_Y0 = 55, SLAT_PITCH = 13.55, SLAT_T = 4;
-const SLAT_TILT = .4; // rad (~23°) — the shed angle, shared by the doors and the separator
+const SLAT_TILT = .4; // rad (~23°) — the shed angle of the white door slats
 
 // cabinet shell — the front is open behind the louvers so the compressors show
 box(240, 4, 123, 0, 83, 0, steel);       // top
@@ -156,29 +155,27 @@ for (const x of [-117.8, 117.8]) for (const z of [-59.3, 59.3]) box(6, 159, 6, x
 // rail up through the top band, stopping ~1 in (2.5 units) short of the top.
 // It is NOT a solid bar with painted-on slots — it's built like the real thing:
 // two thin side rails with the channel between them left OPEN, louvered by its
-// own black blades on the door ladder (same pitch, thickness and tilt). So the
+// own flat black blades on the door ladder (same pitch and thickness). So the
 // openings are real — you see into the cabinet through them — and each spans the
 // same height as a door opening (pitch minus blade), lined up row for row.
 // The separator overlaps the door bezels in x (rails at x 5…9, bezels at 5…13),
 // so it MUST clear them in z or the two solids interpenetrate and z-fight. The
-// bezels' front face is at z 61.5; every separator part therefore sits entirely
+// bezels' front face is at z 61.5; every separator rail therefore sits entirely
 // in front of it (0.4 deep at 61.8 → z 61.6…62.0 — no shared plane, no overlap).
 // Nearly flush on purpose: 0.5 proud of the doors, just enough to read as a divider.
-const SEP_Z = 61.8;
-for (const x of [-7, 7]) box(4, 155, .4, x, 4.5, SEP_Z, trim); // the two side rails
+const SEP_Z = 61.8, SEP_D = .4;
+for (const x of [-7, 7]) box(4, 155, SEP_D, x, 4.5, SEP_Z, trim); // the two side rails
 { // the channel is open (louvered) only where the doors have slats; above the top
   // blade and below the bottom one it's solid, like the doors' plain top band and
   // bottom margin — an open gap there would look like a hole in the separator.
   const TOP = 82, BOT = -73;                         // the column's extent
   const hi = SLAT_Y0 + SLAT_T / 2;                   // top edge of the topmost blade
   const lo = -67 - SLAT_T / 2;                       // bottom edge of the lowest one
-  box(10, TOP - hi, .4, 0, (TOP + hi) / 2, SEP_Z, trim); // solid above the ladder…
-  box(10, lo - BOT, .4, 0, (lo + BOT) / 2, SEP_Z, trim); // …and below it
+  box(10, TOP - hi, SEP_D, 0, (TOP + hi) / 2, SEP_Z, trim); // solid above the ladder…
+  box(10, lo - BOT, SEP_D, 0, (lo + BOT) / 2, SEP_Z, trim); // …and below it
 }
-for (let y = SLAT_Y0; y >= -67; y -= SLAT_PITCH) {   // the blades, bridging the open channel
-  const b = box(10, SLAT_T, .4, 0, y, SEP_Z, trim); // proud of the white slats behind them
-  b.rotation.x = SLAT_TILT; // match the doors, or the ladder reads as flat rungs
-}
+for (let y = SLAT_Y0; y >= -67; y -= SLAT_PITCH) // flat blades, flush with the separator rails
+  box(10, SLAT_T, SEP_D, 0, y, SEP_Z, trim);
 // flat door bezels flanking each louver stack (photo: white margins before the louvers)
 for (const x of [-110, -9, 9, 110]) box(8, 134, 4, x, -6, 59.5, steel);
 { const cb = box(6, 53, 42, 122, 50, 0, M(0xe8ecef, .3, .3)); // control box, right end — upper third of the panel, horizontally centered (end-view drawing)
@@ -294,8 +291,8 @@ const fans = [], bladeGeo = new THREE.RingGeometry(8, 30, 12, 1, -.55, 1.1),
 // after every render. tick() fills the chips' inner ids like any DOM node —
 // no data flows through here, only positions.
 const chipAnchors = [ // [chip id, x, y, z (model units)]
-  ["chipOut", -142, -6, 15],  // supply stub (−124, −14) — out temp, setpoint, supply psi
-  ["chipIn",  -142, -46, 15], // return stub (−124, −37) — in temp, ΔT
+  ["chipOut", -142, -6, 15],  // supply stub (−124, −14) — out temp
+  ["chipIn",  -142, -46, 15], // return stub (−124, −37) — in temp
   ["chipTop",  30, 96, 0],    // over the top skin — cooling demand
   ["chipRes", -100, 96, -45], // reservoir filler cap — reservoir temp
   // One chip per circuit (low + high side merged — see dashboard.html), each anchored
