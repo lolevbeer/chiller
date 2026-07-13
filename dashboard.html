@@ -244,8 +244,8 @@ details td, details th { padding: 3px 10px; text-align: left; color: var(--mut);
    dialog's UA default, which would otherwise pin it to the top-left corner. */
 .pgd-dialog { max-width: 860px; width: calc(100% - 32px); margin: auto; padding: 20px;
   border: 1px solid var(--line); border-radius: 10px;
-  background: var(--card); color: var(--ink); }
-.pgd-dialog::backdrop { background: rgb(0 0 0 / .55); }
+  background: #000; color: var(--ink); }
+.pgd-dialog::backdrop { background: rgb(0 0 0 / .55); backdrop-filter: blur(6px); }
 .pgd-dialog .pgd-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .pgd-dialog .pgd-bar h2 { margin: 0; }
 .pgd-dialog .x { margin-left: auto; background: none; border: 0; cursor: pointer;
