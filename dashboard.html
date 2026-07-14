@@ -26,7 +26,6 @@ body {
   background: var(--bg); color: var(--ink);
   font: 400 14px/1.45 "Inter", -apple-system, sans-serif;
   font-variant-numeric: tabular-nums;
-  /* same horizontal inset the (full-bleed) header uses, so content lines up under it */
   width: min(100%, 1548px); margin: 0 auto;
   padding: 0 24px 60px;
   overflow-x: clip; /* the .scene 100vw breakout must not create a horizontal scrollbar */
@@ -34,12 +33,8 @@ body {
 section { padding: 20px 0; transition: opacity .3s; }
 /* stale data reads as stale: everything below the header dims while offline */
 body.offline section, body.offline details { opacity: .45; }
-/* full-bleed: same 100vw breakout the .scene uses. The breakout escapes the
-   body's horizontal padding, so the header sets its own generous inset. */
-header { display: flex; align-items: center; gap: 14px;
-  width: 100vw; margin-left: calc(50% - 50vw);
-  /* max() = the body's own inset: 24px until the 1548px cap, then it tracks the centering margin */
-  padding: 12px max(24px, calc((100vw - 1500px) / 2)); }
+/* sits inside the body's inset, so it lines up with the content below it */
+header { display: flex; align-items: center; gap: 14px; padding: 12px 0; }
 header .logo { height: 30px; width: auto; flex: none; color: var(--ink); }
 h1 { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
 /* unit identity: the vendor seal + model name, sitting in the header to the
