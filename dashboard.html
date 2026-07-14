@@ -26,21 +26,16 @@ body {
   background: var(--bg); color: var(--ink);
   font: 400 14px/1.45 "Inter", -apple-system, sans-serif;
   font-variant-numeric: tabular-nums;
-  max-width: 760px; margin: 0 auto; padding: 16px 24px 60px;
+  width: min(100%, 1548px); margin: 0 auto;
+  padding: 0 24px 60px;
   overflow-x: clip; /* the .scene 100vw breakout must not create a horizontal scrollbar */
 }
-/* wide screens: the readings live on the model now, so the page is one column —
-   just give the unit + chart more room. ponytail: 1400px ceiling keeps chips near the cabinet */
-@media (min-width: 1100px) { body { max-width: 1400px; padding: 16px 48px 60px; } }
 section { padding: 20px 0; transition: opacity .3s; }
 /* stale data reads as stale: everything below the header dims while offline */
 body.offline section, body.offline details { opacity: .45; }
-/* full-bleed: same 100vw breakout the .scene uses. The breakout escapes the
-   body's horizontal padding, so the header sets its own generous inset. */
-header { display: flex; align-items: center; gap: 14px;
-  width: 100vw; margin-left: calc(50% - 50vw); padding: 20px 32px 28px; }
-.page-title { font-size: 20px; font-weight: 600; letter-spacing: -.02em; }
-header .logo { height: 52px; width: auto; flex: none; color: var(--ink); }
+/* sits inside the body's inset, so it lines up with the content below it */
+header { display: flex; align-items: center; gap: 14px; padding: 12px 0; }
+header .logo { height: 30px; width: auto; flex: none; color: var(--ink); }
 h1 { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
 /* unit identity: the vendor seal + model name, sitting in the header to the
    right of the MGR mark. The seal ships black-on-transparent (gd_seal.svg,
@@ -50,7 +45,7 @@ h1 { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
 .site-id { margin-left: auto; }
 .unit-id { display: flex; align-items: center; gap: 12px; }
 .unit-id .meta { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 2px; }
-.unit-id .lolev { height: 44px; width: auto; flex: none; color: var(--ink); }
+.unit-id .lolev { height: 32px; width: auto; flex: none; color: var(--ink); }
 .site { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
 .unit-id .seal { height: 56px; width: 56px; flex: none; filter: invert(1); opacity: .8; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
@@ -191,11 +186,10 @@ h2 .cst { color: var(--dim); font-weight: 400; }
 @media (max-width: 760px) {
   body { padding: 12px 16px 48px; }
   section { padding: 16px 0; }
-  header { gap: 10px; padding: 16px 16px 22px; }
-  header .logo { height: 40px; }
-  .page-title { font-size: 18px; white-space: nowrap; }
+  header { gap: 10px; }
+  header .logo { height: 26px; }
   .site-id { gap: 8px; }
-  .unit-id .lolev { height: 36px; }
+  .unit-id .lolev { height: 28px; }
   .gd-id { margin-bottom: 12px; }
   #hist { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   #hist .safety { grid-column: 1; grid-row: 1; }
@@ -269,7 +263,6 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
   <svg class="logo" viewBox="0 0 21 25" aria-label="MGR">
     <path fill-rule="evenodd" fill="currentColor" d="M12.4112486,0 C16.6779153,0 20.0000231,2.8 20.0000231,7.06666667 C20.017005,13.6557983 20.0198353,18.9669094 20.008514,23 C20.0000231,25.0072296 17.0000231,25.0072296 17.0000231,23 C17.0201919,19.0776611 17.0201919,17.1666611 17.0000231,17.267 L11.4666897,22.22546 C11.0845456,22.6394495 10.5807063,22.8556844 10.0714346,22.8741647 C9.514571,22.894372 8.95121225,22.6781371 8.53335641,22.22546 L3.00002308,17.267 L3.00002308,23 C3.00002308,25.0460881 0,25.0460881 0,23 L0,7.06666667 C0,2.8 3.32065968,0 7.58732634,0 L12.4112486,0 Z M7.20002308,10.7333333 C7.20002308,12.2797306 8.45362578,13.5333333 10.0000231,13.5333333 C11.5464204,13.5333333 12.8000231,12.2797306 12.8000231,10.7333333 C12.8000231,9.18693603 11.5464204,7.93333333 10.0000231,7.93333333 C8.45362578,7.93333333 7.20002308,9.18693603 7.20002308,10.7333333 Z"/>
   </svg>
-  <div class="page-title">Temperature Monitor</div>
   <div class="unit-id site-id">
       <!-- Lolev mark (from ~/Repos/lolev-manager2/src/graphics/Logo.tsx), inlined with currentColor so it follows the theme -->
       <svg class="lolev" viewBox="0 0 485 530" aria-label="Lolev Beer">
