@@ -139,6 +139,11 @@ h2 .cst { color: var(--dim); font-weight: 400; }
 #ranges button.on { color: var(--ink); background: var(--line); }
 #chart { margin-top: 4px; min-height: 260px; }
 #chart .msg { color: var(--dim); font-size: 13px; padding: 90px 0; text-align: center; }
+/* datalogger-stopped banner: sits above the chart, carries the manual restart steps */
+#chart .log-stopped { color: var(--ink); font-size: 12.5px; line-height: 1.5;
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  border-left: 3px solid var(--bad); border-radius: 4px; padding: 8px 12px; margin-bottom: 8px; }
+#chart .log-stopped strong { color: var(--bad); }
 /* uPlot's legend is a <table> of stroke swatches by default, which reads as a form.
    Reflow it into a centered row of pills: a color dot (the series' own stroke, which
    uPlot inlines as a border-color) and the live value. */
@@ -152,7 +157,9 @@ h2 .cst { color: var(--dim); font-weight: 400; }
   border-radius: 999px; margin-right: 6px; }
 .u-legend .u-value { color: var(--ink) !important; font-variant-numeric: tabular-nums; }
 .u-legend .u-series > * { padding: 0 !important; }
-.u-legend .u-series:first-child { display: none !important; } /* the "Time:" row is noise — the x-axis says it */
+/* the "Time" row IS shown — it's the cursor's exact-time readout (the x-axis only
+   labels every ~30 min). It has no series color, so drop its empty marker dot. */
+.u-legend .u-series:first-child .u-marker { display: none !important; }
 /* --- 3D unit: three.js scene (vendored, served at /three.js) — glossy-white
    PBR cabinet with real environment reflections. All geometry and behavior
    live in public/unit3d.js (served at /unit3d.js); this div just hosts
