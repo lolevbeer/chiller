@@ -208,12 +208,14 @@ async function loadHist(hours) {
   if ((iA1 < 0 && iA2 < 0) || (iB1 < 0 && iB2 < 0))
     console.warn("history: compressor column(s) missing from the log header — run strips will be empty");
   const xs = [], ins = [], outs = [], as = [], bs = [], ca = [], cb = [];
+  histGaps = []; // [{a,b}] unix-sec spans where logging stopped (the controller log skips them)
   for (const line of rows) {
     const c = line.split(",");
     if (c.length < head.length) continue;
     const t = new Date(c[iT].slice(0, 19)).getTime() / 1000; // strip +00:00, parse as local
     if (!isFinite(t)) continue;
     if (xs.length && t - xs[xs.length - 1] > 900) {          // >15 min hole: break the lines
+      histGaps.push({ a: xs[xs.length - 1], b: t });         // a gap in the controller's own log = logging was stopped
       xs.push(t - 1); ins.push(null); outs.push(null); as.push(null); bs.push(null);
       ca.push(null); cb.push(null);
     }
@@ -245,6 +247,13 @@ function condF(bar) { // °C sat temp for propane at `bar` abs, returned in °F;
 // dashed reference across the window — the datalogger has no setpoint column,
 // so past setpoint changes aren't recorded; only "where it should be now".
 let histSetp = null;
+let histGaps = []; // logging-stopped spans in the current range, set by loadHist
+
+// The controller's onboard log freezes the instant a global alarm fires and does
+// not re-arm when it clears — re-arming is manual. Shown in the stopped banner so
+// whoever sees the frozen chart knows how to fix it without hunting for the steps.
+const RESTART_STEPS = "On the controller display (pGD): hold Alarm + Enter ~3 s for the " +
+  "system menu → LOGGER → RESTART LOGS. Logging re-arms even if it says “no logs to restart.”";
 
 let histChart, histHours = 6;
 function drawHist(data) {
@@ -255,6 +264,17 @@ function drawHist(data) {
     return;
   }
   el.innerHTML = "";
+  // Datalogger currently stopped: newest row is stale while the controller itself
+  // is live (offline is a different state — its own banner covers it). Drift runs
+  // the clock fast, so a live tail sits at/ahead of now; only a real stop lags.
+  const last = data[0][data[0].length - 1];
+  if (!document.body.classList.contains("offline") && Date.now() / 1000 - last > 900) {
+    const b = document.createElement("div");
+    b.className = "log-stopped";
+    b.innerHTML = `<strong>Datalogger stopped</strong> — no new rows for ${age(Date.now() - last * 1000)}. ` +
+      `The onboard log halts on any alarm and won’t restart on its own. ${RESTART_STEPS}`;
+    el.appendChild(b);
+  }
   const css = getComputedStyle(document.documentElement);
   const v = p => css.getPropertyValue(p).trim();
   // hairline dashed grid, no tick marks: the data should carry the eye, not the frame
@@ -301,7 +321,9 @@ function drawHist(data) {
     // one hover dot on the hovered series, sized to be findable on a wall display
     cursor: { points: { size: 7 }, y: false },
     series: [
-      {},
+      // x series: the legend row is un-hidden (see dashboard.html) so the cursor
+      // reads out the exact hovered time — the axis only labels every ~30 min.
+      { label: "Time", value: (u, ts) => (ts == null ? "—" : ChillerDateTime.clock(ts * 1000, true)) },
       { label: "Return", stroke: IN,  width: 2, fill: fade(IN),  value: degF },
       { label: "Supply", stroke: OUT, width: 2, fill: fade(OUT), value: degF },
       strip("Compressor A", "--ckt-a"), strip("Compressor B", "--ckt-b"),
@@ -317,6 +339,25 @@ function drawHist(data) {
     axes: [axis, { ...axis, size: 46, values: (u, vs) => vs.map(x => x + "°") },
       { ...axis, size: 46, scale: "cond", side: 1, grid: { show: false },
         values: (u, vs) => vs.map(x => x + "°") }],
+    // shade each logging-stopped span so a hole reads as "logs stopped here", not
+    // missing data. drawClear runs after the canvas clear, before the series paint,
+    // so the band sits under the lines. uPlot only fires hooks registered via plugins.
+    plugins: [{ hooks: { drawClear: u => {
+      if (!histGaps.length) return;
+      const { ctx } = u, { top, height } = u.bbox;
+      ctx.save();
+      ctx.font = '10px "Inter", sans-serif'; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      const band = v("--bad") + "1a", ink = v("--bad");
+      for (const g of histGaps) {
+        const x0 = u.valToPos(g.a, "x", true), x1 = u.valToPos(g.b, "x", true);
+        ctx.fillStyle = band; ctx.fillRect(x0, top, Math.max(x1 - x0, 2), height);
+        const label = "logs stopped";
+        if (x1 - x0 > ctx.measureText(label).width + 8) {
+          ctx.fillStyle = ink; ctx.fillText(label, (x0 + x1) / 2, top + height / 2);
+        }
+      }
+      ctx.restore();
+    } } }],
   }, [...data, data[0].map(() => histSetp)], el);
 }
 
