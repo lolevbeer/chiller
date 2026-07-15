@@ -202,12 +202,12 @@ unit.add(new THREE.LineSegments( // black edge trim on the cabinet silhouette
     slats.setMatrixAt(i++, m.compose(new THREE.Vector3(x, y, 59.5), q, one));
   unit.add(slats);
 }
-// scroll compressors, steel blue — one per zone (A top, B bottom), stacked at
-// the same x just right of the door split, half-height, per the front-view
-// drawing. compGeo = radius/height; A at y 20, B at y −44 (the [y, i] pairs,
-// i = circuit index into compMat); x/z shared in position.set
+// scroll compressors, steel blue — one per zone (B top, A bottom, per the real
+// unit), stacked at the same x just right of the door split, half-height, per the
+// front-view drawing. compGeo = radius/height; B at y 20, A at y −44 (the [y, i]
+// pairs, i = circuit index into compMat); x/z shared in position.set
 const compGeo = new THREE.CylinderGeometry(18, 18, 39, 24);
-[[20, 0], [-44, 1]].forEach(([y, i]) => { const c = new THREE.Mesh(compGeo, compMat[i]);
+[[20, 1], [-44, 0]].forEach(([y, i]) => { const c = new THREE.Mesh(compGeo, compMat[i]);
   c.position.set(60, y, 36); unit.add(c); });
 // G&D seal on the round door badges, like the real unit: the vendor SVG
 // (served at /logo.svg) is drawn white-on-black onto a canvas mapped to each
@@ -262,7 +262,7 @@ cap.position.set(-100, 87, -45); unit.add(cap);
 // condenser zones on the BACK, hugging the control-box end (screen-left when
 // facing the back, per the rear-view drawing — blank reservoir third at the glycol
 // end): one wide see-through mesh screen per zone over a real opening in the
-// back skin, top = A, bottom = B, each spanning its fan pair; fans sit inside
+// back skin, top = B, bottom = A, each spanning its fan pair; fans sit inside
 // the cabinet just behind their screen, curved-sector blades on a hub
 const fans = [], bladeGeo = new THREE.RingGeometry(8, 30, 12, 1, -.55, 1.1),
   hubGeo = new THREE.CylinderGeometry(9, 9, 8, 16);
@@ -305,8 +305,8 @@ const chipAnchors = [ // [chip id, x, y, z (model units)]
   // One chip per circuit (low + high side merged — see dashboard.html), each anchored
   // at its own compressor (60, 20 / 60, −44) and carrying the whole loop. Offset out in
   // x and spread in y just far enough that the two tall chips clear the cabinet.
-  ["chipA",   134, 40, 42],   // compressor A — the whole circuit A loop
-  ["chipB",   134, -58, 42],  // compressor B — the whole circuit B loop
+  ["chipA",   134, -58, 42],  // compressor A (bottom) — the whole circuit A loop
+  ["chipB",   134, 40, 42],   // compressor B (top) — the whole circuit B loop
 ].map(([id, x, y, z]) => { const o = new THREE.Object3D();
   o.position.set(x, y, z); unit.add(o); return [document.getElementById(id), o]; });
 const wp = new THREE.Vector3();
@@ -443,7 +443,7 @@ function frame(t) {
     pgdPanel.material.emissiveIntensity = pgdGlow * .8;
   }
   // ponytail: 100% = 2.5 rev/s is display calibration, not physics — tune to taste
-  fans.forEach((f, i) => f.rotation.z -= dt * 2 * Math.PI * 2.5 * fanSpd[i < 2 ? 0 : 1] / 100);
+  fans.forEach((f, i) => f.rotation.z -= dt * 2 * Math.PI * 2.5 * fanSpd[i < 2 ? 1 : 0] / 100);
   // nothing moving (turntable stopped, not dragging, fans parked) → identical pixels, skip the draw;
   // data changes still show because unit3d.changed() renders on its own
   if (visible && (auto || grab || fanSpd[0] > .1 || fanSpd[1] > .1 || glowChanged)) render();
