@@ -6,3 +6,4 @@ diag.txt
 widemap.json
 log_cache.csv
 log_cache.csv.tmp
+pgd-capture.log
