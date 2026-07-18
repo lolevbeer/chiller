@@ -249,6 +249,7 @@ that an incident recovered.
 | High/low pressostat trip | Mechanical switch tripped | Immediate |
 | Critical glycol outlet | `SLACK_CRIT_F=45` °F | `SLACK_DWELL_MIN=5` min |
 | High glycol outlet | `SLACK_HIGH_F=5` °F above setpoint | `SLACK_DWELL_MIN=5` min |
+| Glycol boost nudge | Above `SLACK_BOOST_F=40` °F — recommends dropping the setpoint `SLACK_BOOST_DROP_F=10` °F below the current reading until it recovers | `SLACK_DWELL_MIN=5` min |
 | Glycol freeze floor | Below `SLACK_FREEZE_F=20` °F | 5 min |
 | No flow | Pump running while its flow switch reports no flow | 2 min |
 | Not cooling | Compressor running off setpoint without a falling outlet trend | `SLACK_NOTCOOL_MIN=20` min |

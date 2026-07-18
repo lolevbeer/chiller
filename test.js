@@ -135,6 +135,19 @@ assert.deepStrictEqual(seq(...rep(6, hot), { ...OK, regs: null })[6], []);
 // The critical band is its own condition, above the warning one
 assert.ok(seq(...rep(6, warm(460)))[5][0].includes("Critical glycol supply temperature"));
 
+// Glycol boost nudge: supply strictly above BOOST_F (40°F) for the 5-min dwell
+// posts an actionable "lower the setpoint temporarily" note recommending
+// BOOST_DROP_F (10°F) below the current reading, and naming the setpoint to restore.
+const over40 = (t) => ({ ...OK, regs: { ...REGS_OK, 68: t, 70: 350 } }); // 35°F setpoint
+assert.deepStrictEqual(seq(...rep(6, over40(410))).slice(0, 5).flat().filter((p) => p.includes("above 40")), []); // dwell not yet met
+const boostPost = seq(...rep(6, over40(410)))[5].find((p) => p.includes("Glycol supply above 40°F"));
+assert.ok(boostPost && boostPost.includes("Temporarily set the setpoint to 31.0°F") && boostPost.includes("below the current 41.0°F"));
+assert.ok(boostPost.includes("Restore the normal setpoint (35.0°F)"));
+assert.deepStrictEqual(seq(...rep(6, over40(400))).flat().filter((p) => p.includes("above 40°F")), []); // exactly 40°F does not trip
+// Recovers with hysteresis once supply is a full HYST_F back under the threshold.
+assert.deepStrictEqual(seq(...rep(6, over40(410)), over40(390)).at(-1).filter((p) => p.includes("Glycol supply above 40°F recovered")), []); // 39°F: still within hysteresis
+assert.ok(seq(...rep(6, over40(410)), over40(375)).at(-1).find((p) => p.includes("Glycol supply above 40°F recovered"))); // 37.5°F: clear
+
 // Freeze floor (5 elapsed min) and lost flow while the pump runs (2 elapsed min)
 assert.ok(seq(...rep(6, warm(195)))[5][0].includes("below the freeze floor")); // 19.5°F
 const dry = { ...OK, web: { ...WEB_OK, "Glycol flow A ok": 0 } };
