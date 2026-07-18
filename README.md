@@ -1,6 +1,6 @@
 # Chiller — G&D glycol chiller monitoring
 
-Read-only monitoring for a G&D air-cooled glycol chiller at Lolev Beer. A small
+Monitoring for a G&D air-cooled glycol chiller at Lolev Beer. A small
 Node.js server reads the Carel c.pCO controller over Modbus TCP and its HTTP
 microwebsite, then serves a live dashboard, JSON/CSV endpoints, alarm history,
 Slack alerts, and read-only Slack commands.
@@ -16,9 +16,12 @@ site LAN 192.168.1.0/24
       └── HTTP :80 — web variables, alarms, datalogger, and virtual pGD
 ```
 
-The application never writes controller registers. It has no built-in
-authentication; put an access-control layer such as Cloudflare Access in front
-of it before exposing it beyond a trusted network.
+The application is read-only except for one opt-in path: the [automatic
+setpoint boost](#automatic-setpoint-boost) writes the cooling setpoint to dodge
+the controller's hardcoded high-glycol shutdown, and only when
+`SETPOINT_WRITE=1` is set. Every other register access is a read. The
+application has no built-in authentication; put an access-control layer such as
+Cloudflare Access in front of it before exposing it beyond a trusted network.
 
 ## Contents
 
@@ -26,6 +29,7 @@ of it before exposing it beyond a trusted network.
 - [Production operation](#production-operation)
 - [Deploying to the Pi](#deploying-to-the-pi)
 - [Slack](#slack)
+- [Automatic setpoint boost](#automatic-setpoint-boost)
 - [HTTP interface](#http-interface)
 - [Architecture and data sources](#architecture-and-data-sources)
 - [Hardware reference](#hardware-reference)
@@ -80,8 +84,11 @@ the code. Environment variables set by the service or shell are also supported.
 | `SLACK_APP_TOKEN` | unset | Slack app-level token for Socket Mode commands |
 | `SLACK_BOT_TOKEN` | unset | Slack bot token for `/chiller` commands |
 | `SLACK_DASHBOARD_URL` | unset | Operator-accessible dashboard link appended to Slack responses |
+| `SETPOINT_WRITE` | unset | `1` enables the [automatic setpoint boost](#automatic-setpoint-boost) write path; anything else keeps the app fully read-only |
+| `SETPOINT_WREG` | `1` | HOLDING register the setpoint is written to; confirm with `probe_setpoint.js` first |
 
-Slack threshold variables are listed under [Alert behavior](#alert-behavior).
+Slack threshold variables are listed under [Alert behavior](#alert-behavior);
+`BOOST_*` variables under [Automatic setpoint boost](#automatic-setpoint-boost).
 `DEV=1` is set by `npm run dev` and enables only the live-reload endpoint.
 
 ## Production operation
@@ -249,7 +256,7 @@ that an incident recovered.
 | High/low pressostat trip | Mechanical switch tripped | Immediate |
 | Critical glycol outlet | `SLACK_CRIT_F=45` °F | `SLACK_DWELL_MIN=5` min |
 | High glycol outlet | `SLACK_HIGH_F=5` °F above setpoint | `SLACK_DWELL_MIN=5` min |
-| Glycol boost nudge | Above `SLACK_BOOST_F=40` °F — recommends dropping the setpoint `SLACK_BOOST_DROP_F=10` °F below the current reading until it recovers | `SLACK_DWELL_MIN=5` min |
+| Shutdown-trip nudge | Supply more than `BOOST_MARGIN_F=13` °F above setpoint (5 °F short of the firmware's setpoint + 18 °F shutdown) — recommends temporarily raising the setpoint to `BOOST_DROP_F=10` °F below the current supply; silenced entirely when `SETPOINT_WRITE=1` because the boost module posts its own actions | `SLACK_DWELL_MIN=5` min |
 | Glycol freeze floor | Below `SLACK_FREEZE_F=20` °F | 5 min |
 | No flow | Pump running while its flow switch reports no flow | 2 min |
 | Not cooling | Compressor running off setpoint without a falling outlet trend | `SLACK_NOTCOOL_MIN=20` min |
@@ -287,6 +294,95 @@ accumulator resets on service restart and the message states the actual window.
 - **More context is needed.** Use
   `journalctl -u chiller -n 200 --no-pager`; redact every secret before sharing
   output. The implementation does not intentionally log token values.
+
+## Automatic setpoint boost
+
+The c.pCO firmware has a **hardcoded** high-glycol alarm: when supply
+temperature exceeds **setpoint + 18 °F** (10 °C, a firmware constant) it alarms
+and **shuts the unit off**. A shutdown is the worst outcome for the glycol loop,
+so `lib/boost.js` can dodge the trip automatically: when the margin over the
+setpoint exceeds `BOOST_MARGIN_F` (5 °F of headroom before the trip) for
+`BOOST_DWELL_MIN` consecutive samples, it raises the setpoint to
+supply − `BOOST_DROP_F`, keeping 10 °F of margin while the compressors keep
+pulling the loop down. Once supply recovers to within `BOOST_RESTORE_F` of the
+**original** setpoint for the same dwell, the original setpoint is written back
+and the incident ends.
+
+**Writes are off until `SETPOINT_WRITE=1`.** The module is a no-op otherwise,
+and the manual Slack nudge above remains the only mitigation. Safeguards while
+enabled:
+
+- The margin test re-arms against the raised setpoint (ratchet), but never
+  writes above `BOOST_CEIL_F` and never more than `BOOST_MAX_WRITES` raises per
+  incident — past either limit it posts a "shutdown may be imminent" alert
+  instead.
+- Null, non-finite, or implausible readings (supply outside 10–90 °F, setpoint
+  outside 15–60 °F) never act and reset the dwell counters. All threshold
+  comparisons happen in integer tenths (the controller's native x10 resolution),
+  so float noise can never move a boundary.
+- The `BOOST_*` thresholds are validated at startup: if any fails to parse to a
+  usable number (e.g. `BOOST_DWELL_MIN=5m`), the boost refuses to start rather
+  than run with degraded gates — and the dwell gates in `decide()` additionally
+  fail safe (nothing fires) under a `NaN` dwell.
+- If the setpoint moves more than 0.2 °F (two register counts) from what the
+  module last wrote, a human intervened: the automation posts an abort naming
+  the pre-boost setpoint and stands down.
+- A raise that could not restore at least 1 °F of margin (setpoint pinned just
+  under `BOOST_CEIL_F`) is not written — it posts the "shutdown may be
+  imminent" ceiling alert instead of spending a write on a cosmetic bump.
+- `writeSetpoint()` itself refuses any value outside a hard 15–60 °F bound,
+  independent of the env-tunable thresholds.
+- Every write is verified by reading the setpoint back. A write that "succeeds"
+  but reads back wrong means `SETPOINT_WREG` is not the setpoint — the module
+  posts an alert and **latches off in `boost_state.json`**: no further writes,
+  across restarts, until the register is re-verified with `probe_setpoint.js`
+  and the state file is deleted.
+- Failed writes are retried on the next poll, bounded by `BOOST_MAX_WRITES`;
+  only the first failure of a streak posts (plus the give-up alert). A write
+  that went out but could not be verified is conservatively assumed to have
+  landed and is re-checked on the next poll — a raised setpoint is never
+  silently orphaned.
+- Incident state persists in gitignored `boost_state.json` (atomic tmp+rename,
+  written only after a write's outcome is known), so a restart mid-incident
+  still restores the saved original setpoint. A malformed state file falls back
+  to idle, and dwell counters deliberately do not survive a restart —
+  "consecutive samples" means consecutive from the current process.
+- Every action — raise, restore, abort, ceiling alert, failed write — posts to
+  `SLACK_WEBHOOK_URL` when it is configured; failed deliveries are queued and
+  retried on the next poll rather than dropped.
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `SETPOINT_WRITE` | unset | Must be exactly `1` to enable writes |
+| `SETPOINT_WREG` | `1` | HOLDING register written with FC6 (the active-setpoint address per [device findings](#device-findings)); **unconfirmed until probed** |
+| `BOOST_MARGIN_F` | `13` | °F over the current setpoint that arms a raise (shared with the manual nudge) |
+| `BOOST_DROP_F` | `10` | Raise target is supply − this many °F |
+| `BOOST_RESTORE_F` | `8` | °F over the original setpoint at which the incident ends |
+| `BOOST_CEIL_F` | `45` | Never write a setpoint above this |
+| `BOOST_DWELL_MIN` | `5` | Consecutive one-minute samples before any action (integer ≥ 1, or the boost refuses to start) |
+| `BOOST_MAX_WRITES` | `10` | Raises (and write retries) per incident (integer ≥ 1, or the boost refuses to start) |
+| `BOOST_POLL_MIN` | `1` | Poll interval in minutes |
+| `BOOST_STATE_FILE` | `boost_state.json` beside the code | Incident-state persistence |
+
+### Probing the writable register
+
+The read map is confirmed (INPUT register 70 mirrors the setpoint), but the
+HOLDING register that accepts setpoint writes is **not** — writing an unknown
+register is worse than the shutdown this feature dodges. Before ever setting
+`SETPOINT_WRITE=1`, run the operator-only probe on a machine that can reach the
+controller:
+
+```sh
+node probe_setpoint.js --read                   # read-only: input vs holding 0..80, matches highlighted
+node probe_setpoint.js --write --yes-i-am-sure  # ONE no-op write: current setpoint value, unchanged
+```
+
+Run bare, the script refuses and prints usage; `--write` refuses without the
+confirmation flag. The write step writes the *current* setpoint value to
+`SETPOINT_WREG` (a no-op if the register is right), re-reads both register
+spaces, and reports anything that moved. Once the register is confirmed, set
+`SETPOINT_WREG` (if different) and `SETPOINT_WRITE=1` in `.env` and restart the
+service.
 
 ## HTTP interface
 
@@ -336,9 +432,12 @@ negative values wrap through `uint16`; `scale()` handles that conversion.
 Statuses, percentages represented in tenths, booleans, and hour counters are
 interpreted according to `LABELS` rather than blindly scaled.
 
-HOLDING registers contain configuration, including the active cooling setpoint
-at address 1. The dashboard never writes them; its live setpoint comes from the
-read-only INPUT map at address 70.
+HOLDING registers contain configuration, including the active cooling setpoint.
+The dashboard's live setpoint comes from the read-only INPUT map at address 70;
+the only write the application can ever perform is `writeSetpoint()` (FC6 to
+`SETPOINT_WREG`, read-back verified), used solely by the opt-in
+[automatic setpoint boost](#automatic-setpoint-boost) and inert unless
+`SETPOINT_WRITE=1`.
 
 ### Controller web variables
 
@@ -423,7 +522,7 @@ the low side; and the evaporator boils refrigerant while absorbing glycol heat.
 The valve trims suction superheat to avoid liquid slugging without starving the
 evaporator. The c.pCO compares glycol supply temperature with the setpoint,
 computes cooling demand, and stages the circuits. All dashboard access is
-read-only.
+read-only apart from the opt-in setpoint-boost write path described above.
 
 ### 3D model specification
 
@@ -462,7 +561,9 @@ and control-box discrepancies have been corrected.
   exact discharge-pressure/condensing-temperature saturation relationship.
 - FC3 HOLDING registers are the configuration bank. Address 1 is the active
   cooling setpoint; addresses 11–14 hold the condenser fan band; 25 and 29 hold
-  superheat settings. They are read-only to this project.
+  superheat settings. This project reads them freely but writes only
+  `SETPOINT_WREG`, and only via the opt-in setpoint boost after the register is
+  confirmed with `probe_setpoint.js`.
 - Outside-air and discharge-temperature probes are not installed. Their flat
   32 °F or approximately −86 °F values are controller sentinels, not readings.
 - A second-setpoint digital input exists but the alternate 50 °F schedule is not
@@ -596,8 +697,12 @@ dashboard access.
 ## Repository map
 
 - `chiller_dashboard.js` wires the modules into the `node:http` server and
-  starts the log cache, webhook reporter, and Socket Mode listener.
-- `lib/modbus.js` contains `read()`, `scale()`, and the confirmed `LABELS` map.
+  starts the log cache, webhook reporter, setpoint-boost loop, and Socket Mode
+  listener.
+- `lib/modbus.js` contains `read()`, `scale()`, the confirmed `LABELS` map, and
+  the read-back-verified `writeSetpoint()`.
+- `lib/boost.js` implements the opt-in automatic setpoint boost: a pure
+  `decide()` core plus the polling/writing/persisting shell.
 - `lib/webvars.js` contains `WEB_VARS` and `readWeb()`.
 - `lib/alarms.js` reads and folds the controller alarm log.
 - `lib/logcache.js` implements datalogger fetch, merge, persistence, and slices.
@@ -613,8 +718,11 @@ dashboard access.
 - `slack-manifest.yml` is the reproducible Slack app definition.
 - `gd_seal.svg` is vendor artwork served as `/logo.svg` and used on the model.
 - `test.js` is the offline test suite for parsing, cache behavior, page wiring,
-  Slack condition sequences, webhook retries, summaries, and every command.
+  Slack condition sequences, setpoint-boost incidents, webhook retries,
+  summaries, and every command.
 - `jsconfig.json` configures JSDoc type checking; there is no build step.
+- `probe_setpoint.js` is the operator-only probe that confirms the writable
+  setpoint holding register before `SETPOINT_WRITE=1` is ever enabled.
 - `correlate_registers.py` is the current discovery tool;
   `find_registers.py` is its superseded predecessor.
 - `teleport_split.sh` repairs the Teleport routing table after each connection.

@@ -3,6 +3,8 @@
 const assert = require("node:assert");
 const { scale, ROW, WEB_VARS, UNUSED_WEB_VARS, PAGE, TSTAMP, step, logInsert, logSlice } = require("./chiller_dashboard.js");
 const { post, flushPosts, initialDailyKey } = require("./lib/slack");
+const { decide, reviveState, validBoostThresholds, IDLE: BOOST_IDLE, TRIP_F, BOOST_MARGIN_F } = require("./lib/boost");
+const { writeSetpoint } = require("./lib/modbus");
 const { commandResponse, trendFromCsv, alarmsText } = require("./lib/slack_commands");
 const dateTime = require("./lib/datetime");
 
@@ -135,18 +137,151 @@ assert.deepStrictEqual(seq(...rep(6, hot), { ...OK, regs: null })[6], []);
 // The critical band is its own condition, above the warning one
 assert.ok(seq(...rep(6, warm(460)))[5][0].includes("Critical glycol supply temperature"));
 
-// Glycol boost nudge: supply strictly above BOOST_F (40°F) for the 5-min dwell
-// posts an actionable "lower the setpoint temporarily" note recommending
-// BOOST_DROP_F (10°F) below the current reading, and naming the setpoint to restore.
-const over40 = (t) => ({ ...OK, regs: { ...REGS_OK, 68: t, 70: 350 } }); // 35°F setpoint
-assert.deepStrictEqual(seq(...rep(6, over40(410))).slice(0, 5).flat().filter((p) => p.includes("above 40")), []); // dwell not yet met
-const boostPost = seq(...rep(6, over40(410)))[5].find((p) => p.includes("Glycol supply above 40°F"));
-assert.ok(boostPost && boostPost.includes("Temporarily set the setpoint to 31.0°F") && boostPost.includes("below the current 41.0°F"));
-assert.ok(boostPost.includes("Restore the normal setpoint (35.0°F)"));
-assert.deepStrictEqual(seq(...rep(6, over40(400))).flat().filter((p) => p.includes("above 40°F")), []); // exactly 40°F does not trip
-// Recovers with hysteresis once supply is a full HYST_F back under the threshold.
-assert.deepStrictEqual(seq(...rep(6, over40(410)), over40(390)).at(-1).filter((p) => p.includes("Glycol supply above 40°F recovered")), []); // 39°F: still within hysteresis
-assert.ok(seq(...rep(6, over40(410)), over40(375)).at(-1).find((p) => p.includes("Glycol supply above 40°F recovered"))); // 37.5°F: clear
+// Glycol boost nudge (manual fallback): margin over the setpoint > BOOST_MARGIN_F
+// (13°F — 5°F short of the firmware's setpoint+18°F shutdown) for the 5-min
+// dwell posts a "temporarily RAISE the setpoint to supply − 10°F" note, and
+// names the normal setpoint to restore. Gated off entirely under SETPOINT_WRITE=1.
+const TRIP_TITLE = `Glycol supply within ${TRIP_F - BOOST_MARGIN_F}°F of the shutdown trip`;
+const nearTrip = (t) => ({ ...OK, regs: { ...REGS_OK, 68: t, 70: 350 } }); // 35°F setpoint
+assert.deepStrictEqual(seq(...rep(6, nearTrip(490))).slice(0, 5).flat().filter((p) => p.includes(TRIP_TITLE)), []); // dwell not yet met
+const boostPost = seq(...rep(6, nearTrip(490)))[5].find((p) => p.includes(TRIP_TITLE));
+assert.ok(boostPost && boostPost.includes(`setpoint + ${TRIP_F}°F`) && boostPost.includes("RAISE the setpoint to 39.0°F"));
+assert.ok(boostPost.includes("below the current 49.0°F supply") && boostPost.includes("Restore the normal setpoint (35.0°F)"));
+assert.deepStrictEqual(seq(...rep(6, nearTrip(480))).flat().filter((p) => p.includes(TRIP_TITLE)), []); // margin exactly 13°F does not trip
+// …and the boundary is float-class independent: 32.2−19.2 computes to
+// 13.000000000000004, but compared in tenths it is still exactly 13°F — no trip.
+assert.deepStrictEqual(seq(...rep(6, { ...OK, regs: { ...REGS_OK, 68: 322, 70: 192 } }))
+  .flat().filter((p) => p.includes(TRIP_TITLE)), []);
+// Recovers with hysteresis once the margin is a full HYST_F back under the threshold.
+assert.deepStrictEqual(seq(...rep(6, nearTrip(490)), nearTrip(465)).at(-1).filter((p) => p.includes(`${TRIP_TITLE} recovered`)), []); // margin 11.5°F: still within hysteresis
+assert.ok(seq(...rep(6, nearTrip(490)), nearTrip(455)).at(-1).find((p) => p.includes(`${TRIP_TITLE} recovered`))); // margin 10.5°F: clear
+// With SETPOINT_WRITE=1 the boost module's own posts are the notification — the
+// manual nudge must not fire at all (the condition reads the env per evaluation).
+process.env.SETPOINT_WRITE = "1";
+assert.deepStrictEqual(seq(...rep(6, nearTrip(490))).flat().filter((p) => p.includes(TRIP_TITLE)), []);
+delete process.env.SETPOINT_WRITE;
+
+// Setpoint boost pure core: decide() drives whole incidents offline, exactly
+// like step() above — samples in, {state, action} out, the shell does the I/O.
+// Defaults: margin 13°F, drop 10°F, restore 8°F, ceiling 45°F, dwell 5 samples.
+const bs = (supplyF, setpointF) => ({ supplyF, setpointF });
+const brun = (start, samples, th) => {
+  let state = start; const actions = [];
+  samples.forEach((x, i) => { const r = decide(state, { t: i * 60000, ...x }, th); state = r.state; actions.push(r.action); });
+  return { state, actions };
+};
+
+// Trigger fires after the dwell, not before, and the raise math is supply − 10°F.
+assert.ok(brun({ ...BOOST_IDLE }, rep(4, bs(43, 29))).actions.every((a) => a === null)); // 14°F margin, 4 samples: not yet
+let boost = brun({ ...BOOST_IDLE }, rep(5, bs(43, 29)));
+assert.ok(boost.actions[4] && boost.actions[4].type === "raise" && boost.actions[4].targetF === 33);
+assert.deepStrictEqual(boost.state, { phase: "active", originalF: 29, lastWrittenF: 33, writes: 1, trigCount: 0, restoreCount: 0 });
+const ACTIVE = boost.state; // active incident reused below: original 29°F, written 33°F
+
+// Ratchet: while active the margin test re-arms against the CURRENT setpoint;
+// a second sustained climb raises again and originalF stays the first setpoint.
+boost = brun(ACTIVE, rep(5, bs(47, 33)));
+assert.ok(boost.actions[4].type === "raise" && boost.actions[4].targetF === 37);
+assert.ok(boost.state.writes === 2 && boost.state.originalF === 29);
+
+// Ceiling: the target clamps to 45°F, and once the clamp can't raise the
+// setpoint any further the action is ceiling-alert (shutdown imminent), which
+// re-arms its own dwell so a standing condition re-alerts once per dwell.
+boost = brun({ ...BOOST_IDLE }, rep(5, bs(57, 40)));
+assert.strictEqual(boost.actions[4].targetF, 45); // min(57−10, 45)
+boost = brun(boost.state, rep(10, bs(59, 45)));
+assert.deepStrictEqual(boost.actions.map((a) => a && a.type),
+  [null, null, null, null, "ceiling-alert", null, null, null, null, "ceiling-alert"]);
+assert.strictEqual(boost.state.phase, "active");
+
+// Max writes per incident: an 11th raise is refused with ceiling-alert instead.
+// Custom thresholds (dwell 1, cap 3, no ceiling) keep the incident short.
+const th = { MARGIN_F: 13, DROP_F: 10, RESTORE_F: 8, CEIL_F: 500, DWELL: 1, MAX_WRITES: 3 };
+{
+  let st = { ...BOOST_IDLE }; const acts = [];
+  for (let i = 0; i < 5; i++) { // supply climbs forever; setpoint tracks each write
+    const r = decide(st, { t: i * 60000, ...bs(30 + i * 4, st.lastWrittenF ?? 15) }, th);
+    st = r.state; acts.push(r.action && r.action.type);
+  }
+  assert.deepStrictEqual(acts, ["raise", "raise", "raise", "ceiling-alert", "ceiling-alert"]);
+}
+
+// Restore measures against the ORIGINAL setpoint, not the raised one: 38°F is
+// within 8°F of the current 33°F but 9°F over the original 29°F — no restore.
+assert.ok(brun(ACTIVE, rep(8, bs(38, 33))).actions.every((a) => a === null));
+boost = brun(ACTIVE, rep(5, bs(36.5, 33))); // 7.5°F over the original: restores after the dwell
+assert.ok(boost.actions.slice(0, 4).every((a) => a === null));
+assert.ok(boost.actions[4].type === "restore" && boost.actions[4].targetF === 29);
+assert.deepStrictEqual(boost.state, { ...BOOST_IDLE }); // incident cleared
+
+// Sanity guards: null or insane readings never act and reset the dwell, so a
+// glitch splitting two 4-sample runs keeps the trigger silent (9 samples total).
+for (const glitch of [bs(null, null), bs(95, 29), bs(9, 29), bs(43, 12), bs(43, 61), bs(NaN, 29)]) {
+  assert.ok(brun({ ...BOOST_IDLE }, [...rep(4, bs(43, 29)), glitch, ...rep(4, bs(43, 29))]).actions.every((a) => a === null));
+}
+
+// Tamper: an active incident whose setpoint no longer matches the last write
+// means a human intervened — abort and stand down, naming the pre-boost
+// setpoint so the human can restore it.
+boost = brun(ACTIVE, [bs(43, 31)]);
+assert.ok(boost.actions[0].type === "abort" && boost.actions[0].reason.includes("human"));
+assert.ok(boost.actions[0].reason.includes("29.0°F")); // the original setpoint, for manual restore
+assert.strictEqual(boost.state.phase, "idle");
+// …but readback noise within 0.2°F of the written value is not tampering.
+assert.strictEqual(brun(ACTIVE, [bs(43, 33.1)]).actions[0], null);
+// The 0.2°F tolerance is compared in register counts, so it holds for EVERY
+// written value: 30.6 vs 30.4 float-subtracts to 0.20000000000000284, which
+// must still read as noise (two counts), while three counts is tampering.
+assert.strictEqual(brun({ ...ACTIVE, lastWrittenF: 30.4 }, [bs(43, 30.6)]).actions[0], null);
+assert.strictEqual(brun({ ...ACTIVE, lastWrittenF: 30.4 }, [bs(43, 30.7)]).actions[0].type, "abort");
+
+// Threshold boundaries are float-class independent too: setpoint 19.2 makes an
+// exactly-13.0°F margin compute to 13.000000000000004, yet it must behave like
+// the exact 13.0 at line ~149 — never a trigger. Same for an exactly-8.0°F
+// recovery delta (32.3 − 24.3 = 7.9999999999999964): NOT within 8°F, no restore.
+assert.ok(brun({ ...BOOST_IDLE }, rep(6, bs(32.2, 19.2))).actions.every((a) => a === null));
+const A243 = { phase: "active", originalF: 24.3, lastWrittenF: 33, writes: 1, trigCount: 0, restoreCount: 0 };
+assert.ok(brun(A243, rep(8, bs(32.3, 33))).actions.every((a) => a === null)); // exactly 8.0°F over: not within
+assert.strictEqual(brun(A243, rep(5, bs(32.2, 33))).actions[4].type, "restore"); // 7.9°F over: restores
+
+// A raise that can't restore at least 1°F of margin is ceiling-bound: alert
+// that automation can't help instead of spending a write on a 0.1°F bump.
+boost = brun({ ...BOOST_IDLE }, rep(5, bs(58.1, 44.9))); // target min(48.1, 45) = 45: a 0.1°F "raise"
+assert.strictEqual(boost.actions[4].type, "ceiling-alert");
+assert.strictEqual(boost.state.writes, 0); // no write budget spent
+
+// Malformed thresholds must refuse to start (validBoostThresholds) AND fail
+// safe inside decide(): a NaN dwell (BOOST_DWELL_MIN="5m") satisfies neither
+// dwell gate, so nothing ever fires — no instant raise, no ceiling-alert spam,
+// and no phantom restore.
+assert.ok(validBoostThresholds(th));
+for (const bad of [{ DWELL: NaN }, { DWELL: 0 }, { DWELL: 2.5 }, { MAX_WRITES: 0 }, { MAX_WRITES: NaN }, { MARGIN_F: NaN }, { CEIL_F: Infinity }]) {
+  assert.ok(!validBoostThresholds({ ...th, ...bad }), JSON.stringify(bad));
+}
+const nanTh = { ...th, DWELL: NaN };
+assert.ok(brun({ ...BOOST_IDLE }, rep(6, bs(50, 29)), nanTh).actions.every((a) => a === null)); // 21°F over: still no raise
+assert.ok(brun(ACTIVE, rep(50, bs(30, 33)), nanTh).actions.every((a) => a === null)); // recovered: no alert/restore spam
+
+// State survives a JSON round-trip (boost_state.json persistence): a restart
+// mid-incident restores the same behavior, including the original setpoint.
+const revived = JSON.parse(JSON.stringify(ACTIVE));
+assert.deepStrictEqual(brun(revived, rep(5, bs(36.5, 33))), brun(ACTIVE, rep(5, bs(36.5, 33))));
+
+// reviveState guards what actually comes off disk. Dwell counters do NOT
+// survive a restart — "5 consecutive samples" means consecutive from this
+// process, so a process that died at trigCount 4 must re-earn the full dwell.
+assert.deepStrictEqual(reviveState({ ...ACTIVE, trigCount: 4, restoreCount: 4 }),
+  { state: { ...ACTIVE, trigCount: 0, restoreCount: 0 }, latched: false });
+assert.strictEqual(brun(reviveState({ ...ACTIVE, trigCount: 4 }).state, [bs(47, 33)]).actions[0], null); // over-margin, but 1 of 5
+// An "active" record missing finite originalF/lastWrittenF (hand edit, schema
+// drift) falls back to idle instead of making decide() throw every tick.
+assert.deepStrictEqual(reviveState({ phase: "active" }), { state: { ...BOOST_IDLE }, latched: false });
+assert.strictEqual(reviveState({ phase: "active", originalF: 29 }).state.phase, "idle");
+assert.deepStrictEqual(reviveState(null).state, { ...BOOST_IDLE });
+assert.strictEqual(reviveState({ ...ACTIVE, writes: "many" }).state.writes, 0); // junk writes clamps to 0
+// The wrong-register latch persists across restarts: one bad register must not
+// earn a fresh live write per systemd restart.
+assert.strictEqual(reviveState({ ...BOOST_IDLE, latched: true }).latched, true);
 
 // Freeze floor (5 elapsed min) and lost flow while the pump runs (2 elapsed min)
 assert.ok(seq(...rep(6, warm(195)))[5][0].includes("below the freeze floor")); // 19.5°F
@@ -262,6 +397,15 @@ const cmdDeps = {
 };
 
 (async () => {
+  // writeSetpoint's own hard clamp: values outside 15..60°F are refused before
+  // any connection is attempted (wrote:false, no ambiguity), independent of the
+  // env-tunable BOOST_* thresholds — the one function that touches hardware
+  // does not trust its caller.
+  for (const bad of [NaN, Infinity, 10, 14.9, 60.1, 80, null]) {
+    const r = await writeSetpoint(/** @type {number} */ (bad));
+    assert.ok(!r.ok && r.wrote === false && r.readback === null && /outside the hard/.test(r.error || ""), String(bad));
+  }
+
   // fetch resolves for HTTP failures, so post() must inspect `ok` explicitly.
   assert.strictEqual(await post({}, async () => new Response("no", { status: 503 }), () => {}), false);
 
