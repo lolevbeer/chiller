@@ -112,6 +112,18 @@ h2 .cst { color: var(--dim); font-weight: 400; }
 .safety .g { display: flex; justify-content: space-between; align-self: stretch;
   gap: 16px; color: var(--mut); font-size: 14px; }
 .safety .g b { color: var(--ink); font-weight: 500; font-size: 16px; letter-spacing: -.01em; }
+/* click-to-edit setpoint: app.js renders the value as this button only when the
+   server reports writesEnabled (SETPOINT_WRITE=1); a real <button> is focusable
+   and Enter-activatable for free. Dotted underline = "this one is editable". */
+.safety .g .setp { background: none; border: 0; padding: 0; cursor: pointer;
+  color: var(--ink); font: 500 16px "Inter", sans-serif; letter-spacing: -.01em;
+  font-variant-numeric: tabular-nums;
+  text-decoration: underline dotted var(--dim); text-underline-offset: 3px; }
+.safety .g .setp:hover, .safety .g .setp:focus-visible { text-decoration-color: var(--accent); }
+/* boost status lines under the setpoint: amber while the automation holds a
+   raised setpoint, red when writes are latched off (wrong-register latch) */
+.safety .boost { color: var(--warn); font-size: 11px; line-height: 1.4; }
+.safety .latched { color: var(--bad); font-size: 11px; line-height: 1.4; }
 .safety .s b { color: var(--ink); font-weight: 500; }
 /* the alarm card is absent entirely when nothing is wrong, so its presence IS the signal */
 .safety .alarm { border-left: 2px solid var(--bad); padding: 4px 0 4px 9px; color: var(--bad);
@@ -261,6 +273,23 @@ details td, details th { padding: 3px 10px; text-align: left; color: var(--mut);
 .pgd-dialog .x:hover { color: var(--ink); }
 .pgd-frame { display: block; width: 100%; aspect-ratio: 820 / 450; border: 0;
   background: transparent; }
+/* setpoint editor: reuses the pGD dialog chrome, sized for a single field */
+.setp-dialog { max-width: 380px; background: var(--bg); }
+.setp-row { display: flex; align-items: center; gap: 8px; font-size: 13px;
+  color: var(--mut); margin-bottom: 12px; }
+.setp-row input { width: 90px; background: var(--bg); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px;
+  font: 500 15px "Inter", sans-serif; font-variant-numeric: tabular-nums; }
+.setp-note { font-size: 12.5px; color: var(--mut); padding: 2px 0; }
+.setp-note.warn { color: var(--warn); }
+.setp-err { color: var(--bad); font-size: 12.5px; min-height: 18px; padding: 4px 0; }
+.setp-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+.setp-actions button { font: 500 13px "Inter", sans-serif; padding: 7px 14px;
+  border-radius: 7px; cursor: pointer; border: 1px solid var(--line);
+  background: none; color: var(--mut); }
+.setp-actions button:hover { color: var(--ink); }
+.setp-actions #setpWrite { background: var(--accent); border-color: var(--accent); color: #fff; }
+.setp-actions #setpWrite:disabled { opacity: .5; cursor: default; }
 footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
 </style>
 </head>
@@ -371,6 +400,27 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
   </div>
   <iframe class="pgd-frame" id="pgdFrame" data-src="/pgd/webpgd.htm"
     title="Carel pGD controller display"></iframe>
+</dialog>
+
+<!-- Setpoint editor: opened by clicking the setpoint readout in the safety
+     rail (app.js renders that readout as a button only when the server reports
+     writesEnabled, i.e. SETPOINT_WRITE=1). Same native-<dialog> pattern as the
+     pGD above — Esc, backdrop, and focus trapping come from the platform. -->
+<dialog class="pgd-dialog setp-dialog" id="setpDialog">
+  <div class="pgd-bar">
+    <h2>Cooling setpoint <span class="cst">writes to the controller</span></h2>
+    <button class="x" id="setpClose" aria-label="Close setpoint editor">&times;</button>
+  </div>
+  <label class="setp-row">New setpoint
+    <input type="number" id="setpInput" min="15" max="60" step="0.5"> °F</label>
+  <!-- consequence line: app.js keeps this current as the input changes -->
+  <div class="setp-note warn" id="setpTrip"></div>
+  <div class="setp-note" id="setpSupply"></div>
+  <div class="setp-err" id="setpErr" role="alert"></div>
+  <div class="setp-actions">
+    <button type="button" id="setpCancel">Cancel</button>
+    <button type="button" id="setpWrite">Write setpoint</button>
+  </div>
 </dialog>
 
 <!-- the controller keeps ~50 events; this is the whole fault history it will admit to -->

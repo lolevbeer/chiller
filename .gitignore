@@ -7,3 +7,5 @@ widemap.json
 log_cache.csv
 log_cache.csv.tmp
 pgd-capture.log
+boost_state.json
+boost_state.json.tmp
