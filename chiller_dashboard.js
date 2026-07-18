@@ -1,7 +1,8 @@
 // Web view of the G&D glycol chiller (c.pCO) over Modbus TCP + HTTP. Read-only
-// except one opt-in path: the automatic setpoint boost (lib/boost.js) writes
-// the cooling setpoint to dodge the firmware's setpoint+18°F shutdown, and
-// only when SETPOINT_WRITE=1.
+// except two opt-in paths, both inert unless SETPOINT_WRITE=1: the automatic
+// setpoint boost (lib/boost.js) writes the cooling setpoint to dodge the
+// firmware's setpoint+18°F shutdown, and the dashboard's manual setpoint
+// control (POST /api/setpoint in lib/routes.js) writes it on operator request.
 // Cloudflare Access sits in front for auth; this app has no login of its own by design.
 // Run:  npm install
 //       CHILLER_IP=192.168.1.69 node chiller_dashboard.js   (PORT defaults to 8000)

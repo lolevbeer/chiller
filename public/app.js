@@ -1,5 +1,7 @@
 // Main page script (classic): the 5 s refresh loop (tick), offline handling,
-// and the uPlot glycol history chart. Loaded by dashboard.html at /app.js.
+// the click-to-edit setpoint control (rendered only when the server reports
+// writesEnabled, i.e. SETPOINT_WRITE=1), and the uPlot glycol history chart.
+// Loaded by dashboard.html at /app.js.
 const S = v => (v > 32767 ? v - 65536 : v) / 10;          // signed int16, ×10
 const STATUS = {1:"Standby",2:"Off — alarm",3:"Off — BMS",4:"Off — schedule",
                 5:"Off — input",6:"Off — keyboard",9:"Running"};
@@ -10,6 +12,12 @@ const sh = v => (v < -50 ? "—" : v.toFixed(1));            // sentinel: probe 
 // global lexical binding, visible to the module): tick() writes live fan speeds and
 // compressor states, then pokes changed(), which the module installs.
 const unit3d = { fans: [0, 0], comps: [false, false], changed: null };
+
+// Setpoint-write state from /api/all: whether the server accepts writes (the
+// setpoint readout becomes a button), the boost automation's live snapshot
+// (drives the "boost active"/latched lines), and the current supply temp
+// (shown in the setpoint dialog for reference).
+let writesOn = false, boostNow = null, liveSupplyF = null;
 
 async function tick() {
   let d;
@@ -29,7 +37,10 @@ async function tick() {
   // health tint on the supply temp — amber above 30 °F, red above 40 °F
   $("glyOut").className = "t out" + (r(68) > 40 ? " bad" : r(68) > 30 ? " warn" : "");
   set("resT", r(132).toFixed(1) + " °F");
-  histSetp = r(70); // feeds the history chart's setpoint reference line
+  histSetp = r(70); // feeds the history chart's setpoint reference line (and the setpoint dialog prefill)
+  liveSupplyF = r(68);
+  writesOn = !!d.writesEnabled;
+  boostNow = d.boost || null;
   set("pwr", (d.regs[1] / 10).toFixed(0) + "%");
 
   for (const [n, sfx] of [["1", "A"], ["2", "B"]]) {
@@ -100,12 +111,29 @@ function safety(w, regs) {
     `<div class="hr"><span>${name}</span><b>${regs[a] ?? "–"}</b><b>${regs[b] ?? "–"}</b></div>`;
 
   // glycol loop targets, sitting above Safety in the left column: what the
-  // controller is aiming for (CoolSetP, reg 70) and the supply pressure it sees
+  // controller is aiming for (CoolSetP, reg 70) and the supply pressure it sees.
+  // When the server accepts writes the setpoint value renders as a button
+  // (click or focus+Enter opens the editor dialog); otherwise it is the same
+  // read-only <b> as always.
+  const setpF = S(regs[70] ?? 0).toFixed(1);
+  const setpVal = writesOn
+    ? `<button class="setp" id="setp" title="Change the cooling setpoint — writes to the controller">${setpF} °F</button>`
+    : `<b>${setpF} °F</b>`;
+  // Boost status lines: everything interpolated is a number off the wire,
+  // coerced through toFixed()/Math — no server string reaches innerHTML.
+  const boostLine = boostNow?.phase === "active"
+    ? `<div class="boost">Boost active: setpoint raised from ${(+boostNow.originalF).toFixed(1)} °F (write ${Math.round(+boostNow.writes)}/${Math.round(+boostNow.maxWrites)})</div>` : "";
+  const latchLine = boostNow?.latched
+    ? `<div class="latched">Setpoint writes latched off — the last automatic write read back wrong; no writes until the register is re-probed</div>` : "";
   const glycol =
     `<h3>Glycol</h3>` +
-    `<div class="g" title="Target supply temperature (CoolSetP)"><span>Setpoint</span><b>${S(regs[70] ?? 0).toFixed(1)} °F</b></div>` +
+    `<div class="g" title="Target supply temperature (CoolSetP)"><span>Setpoint</span>${setpVal}</div>` +
+    boostLine + latchLine +
     `<div class="g"><span>Supply</span><b>${(w["Glycol supply pres psi"] ?? NaN).toFixed(1)} psi</b></div>`;
 
+  // The rail is rebuilt wholesale every tick; if the setpoint button held
+  // keyboard focus, restore it so Tab position survives the refresh.
+  const setpHadFocus = document.activeElement && document.activeElement.id === "setp";
   $("safety").innerHTML =
     glycol +
     `<h3 class="rt">Safety</h3>` +
@@ -117,7 +145,58 @@ function safety(w, regs) {
     (active || last) +
     `<h3 class="rt">Runtime <span>hours · A / B</span></h3>` +
     hrs("Compressor", 135, 141) + hrs("Fan", 158, 160) + hrs("Pump", 129, 131);
+  if (setpHadFocus) $("setp")?.focus();
 }
+
+// --- Setpoint editor -------------------------------------------------------
+// Only reachable when /api/all reports writesEnabled (safety() renders the
+// button then). The dialog shows the consequence of the value being typed —
+// the firmware shuts the unit down at setpoint + 18 °F — and the confirm
+// button POSTs {setpointF} to /api/setpoint. On success the dialog closes and
+// tick() refreshes, so the new value on the page comes from a real read.
+const TRIP_F = 18; // firmware shutdown constant; mirrors TRIP_F in lib/boost.js
+const setpTripLine = () => {
+  const v = parseFloat($("setpInput").value);
+  $("setpTrip").textContent = isFinite(v)
+    ? `Shutdown alarm would trip at ${(v + TRIP_F).toFixed(1)} °F` : "";
+};
+function openSetp() {
+  $("setpInput").value = histSetp != null ? histSetp.toFixed(1) : "";
+  $("setpSupply").textContent = liveSupplyF != null
+    ? `Current supply temperature: ${liveSupplyF.toFixed(1)} °F` : "";
+  $("setpErr").textContent = "";
+  setpTripLine();
+  $("setpDialog").showModal();
+}
+// Delegated: the safety rail's innerHTML is rebuilt every tick, so the button
+// itself can't hold a listener. A <button> makes Enter fire "click" natively.
+$("safety").addEventListener("click", (e) => {
+  if (e.target instanceof Element && e.target.closest("#setp")) openSetp();
+});
+$("setpInput").oninput = setpTripLine;
+$("setpClose").onclick = $("setpCancel").onclick = () => $("setpDialog").close();
+$("setpWrite").onclick = async () => {
+  const v = parseFloat($("setpInput").value);
+  if (!isFinite(v)) { $("setpErr").textContent = "Enter a number"; return; }
+  const b = $("setpWrite");
+  b.disabled = true; // one write in flight at a time
+  $("setpErr").textContent = "";
+  try {
+    const res = await fetch("/api/setpoint", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ setpointF: v }) });
+    const j = await res.json().catch(() => null);
+    if (!j || !j.ok) {
+      // server-provided string → textContent, never markup
+      $("setpErr").textContent = (j && j.error) || `write failed (HTTP ${res.status})`;
+      return;
+    }
+    $("setpDialog").close();
+    tick(); // re-render from a real read rather than trusting the echo
+  } catch {
+    $("setpErr").textContent = "network error — the write may not have reached the server";
+  } finally { b.disabled = false; }
+};
 
 // Human-facing dates come from the same formatter used by Slack. It preserves
 // the controller's site-local clock fields despite their misleading +00:00.

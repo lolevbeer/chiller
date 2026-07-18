@@ -16,10 +16,12 @@ site LAN 192.168.1.0/24
       └── HTTP :80 — web variables, alarms, datalogger, and virtual pGD
 ```
 
-The application is read-only except for one opt-in path: the [automatic
-setpoint boost](#automatic-setpoint-boost) writes the cooling setpoint to dodge
-the controller's hardcoded high-glycol shutdown, and only when
-`SETPOINT_WRITE=1` is set. Every other register access is a read. The
+The application is read-only except for two opt-in paths, both active only
+when `SETPOINT_WRITE=1` is set: the [automatic setpoint
+boost](#automatic-setpoint-boost) writes the cooling setpoint to dodge the
+controller's hardcoded high-glycol shutdown, and the dashboard's manual
+setpoint control (`POST /api/setpoint`) writes it on operator request. Every
+other register access is a read. The
 application has no built-in authentication; put an access-control layer such as
 Cloudflare Access in front of it before exposing it beyond a trusted network.
 
@@ -84,7 +86,7 @@ the code. Environment variables set by the service or shell are also supported.
 | `SLACK_APP_TOKEN` | unset | Slack app-level token for Socket Mode commands |
 | `SLACK_BOT_TOKEN` | unset | Slack bot token for `/chiller` commands |
 | `SLACK_DASHBOARD_URL` | unset | Operator-accessible dashboard link appended to Slack responses |
-| `SETPOINT_WRITE` | unset | `1` enables the [automatic setpoint boost](#automatic-setpoint-boost) write path; anything else keeps the app fully read-only |
+| `SETPOINT_WRITE` | unset | `1` enables both write paths — the [automatic setpoint boost](#automatic-setpoint-boost) and the dashboard's manual `POST /api/setpoint` control; anything else keeps the app fully read-only |
 | `SETPOINT_WREG` | `1` | HOLDING register the setpoint is written to; confirm with `probe_setpoint.js` first |
 
 Slack threshold variables are listed under [Alert behavior](#alert-behavior);
@@ -326,7 +328,10 @@ enabled:
   fail safe (nothing fires) under a `NaN` dwell.
 - If the setpoint moves more than 0.2 °F (two register counts) from what the
   module last wrote, a human intervened: the automation posts an abort naming
-  the pre-boost setpoint and stands down.
+  the pre-boost setpoint and stands down. A manual change made through the
+  dashboard's setpoint control (`POST /api/setpoint`) is covered by the same
+  tamper guard — the boost stands down on its next tick, so the two write
+  paths need no other coordination.
 - A raise that could not restore at least 1 °F of margin (setpoint pinned just
   under `BOOST_CEIL_F`) is not written — it posts the "shutdown may be
   imminent" ceiling alert instead of spending a write on a cosmetic bump.
@@ -394,7 +399,8 @@ unauthenticated and are intended for trusted or access-controlled networks.
 | `/` | Dashboard HTML: live 3D unit, safety state, glycol history, alarms, and virtual-controller entry point |
 | `/api` | JSON map of raw INPUT registers 0–161: `{address: uint16}` |
 | `/api/web` | JSON map of 16 filtered `getvar.csv` points in engineering units |
-| `/api/all` | Combined `{"regs": ..., "web": ...}` payload used by the five-second refresh loop |
+| `/api/all` | Combined `{"regs": ..., "web": ..., "boost": ..., "writesEnabled": ...}` payload used by the five-second refresh loop; `boost` is the setpoint-boost status snapshot and `writesEnabled` tells the page whether the setpoint control renders |
+| `POST /api/setpoint` | Manual setpoint write; see [Manual setpoint endpoint](#manual-setpoint-endpoint) |
 | `/api/alarms` | `{"active": [{name, since}], "recent": [{name, at, cleared}]}` |
 | `/api/log?start=…&stop=…` | Cached CSV slice; timestamps must be `YYYY-MM-DDThh:mm:ss` |
 | `/pgd/*` | Narrow reverse proxy to the controller's live HTML5 pGD interface |
@@ -402,6 +408,34 @@ unauthenticated and are intended for trusted or access-controlled networks.
 | `/uplot.js`, `/uplot.css` | Locally served uPlot assets; no CDN |
 | `/three.js`, `/three.core.min.js`, `/three/addons/*` | Locally served three.js module and postprocessing dependencies |
 | `/reload` | Development-only server-sent event stream used by `npm run dev` |
+
+### Manual setpoint endpoint
+
+`POST /api/setpoint` writes the cooling setpoint from the dashboard's
+click-to-edit control. The body must be `Content-Type: application/json` with
+exactly `{"setpointF": <number>}` (at most 1 KB); requiring the JSON content
+type also blocks cross-site form CSRF, because an HTML form cannot send
+`application/json` without a CORS preflight. The value is rounded to 0.1 °F
+and passed to `writeSetpoint()`, which enforces the hard 15–60 °F bound and
+verifies the write by reading the setpoint back.
+
+Status codes:
+
+| Code | Meaning |
+|---:|---|
+| `200` | Verified write; body `{"ok": true, "setpointF": <readback>}` |
+| `400` | Malformed JSON, missing/non-finite `setpointF`, wrong content type, or a value outside the hard 15–60 °F bound |
+| `403` | `SETPOINT_WRITE` is not `1` — the server is read-only |
+| `405` | Method other than `POST` |
+| `413` | Body over 1 KB |
+| `502` | The write failed or did not verify against the controller |
+
+Successful writes post an audit message to `SLACK_WEBHOOK_URL` (when
+configured) naming the new setpoint and the resulting shutdown-trip
+temperature; an unverified write (sent to the controller but the read-back
+failed) posts a warning, since the hardware may hold the new value. A manual
+write during a boost incident trips the boost module's tamper guard, which
+stands the automation down on its next tick.
 
 ### Dashboard behavior
 
@@ -421,6 +455,15 @@ Clicking the modeled control box opens the live pGD through `/pgd/`. Its keys
 operate the real controller. Browsing information screens is safe; use Esc to
 back out, and do not change settings unless explicitly authorized.
 
+When `SETPOINT_WRITE=1`, the setpoint readout in the glycol rail becomes a
+click-to-edit control (it is focusable, and Enter opens it too): a dialog with
+a number input shows the resulting shutdown-trip temperature live
+(setpoint + 18 °F) and the current supply temperature, and "Write setpoint"
+sends `POST /api/setpoint`. Without `SETPOINT_WRITE=1` the readout renders as
+plain text. The same rail shows a "Boost active" line while the automatic
+setpoint boost holds a raised setpoint, and a warning when boost writes are
+latched off pending a register re-probe.
+
 ## Architecture and data sources
 
 ### Modbus TCP
@@ -435,8 +478,9 @@ interpreted according to `LABELS` rather than blindly scaled.
 HOLDING registers contain configuration, including the active cooling setpoint.
 The dashboard's live setpoint comes from the read-only INPUT map at address 70;
 the only write the application can ever perform is `writeSetpoint()` (FC6 to
-`SETPOINT_WREG`, read-back verified), used solely by the opt-in
-[automatic setpoint boost](#automatic-setpoint-boost) and inert unless
+`SETPOINT_WREG`, read-back verified), used by the opt-in
+[automatic setpoint boost](#automatic-setpoint-boost) and the
+[manual setpoint endpoint](#manual-setpoint-endpoint), both inert unless
 `SETPOINT_WRITE=1`.
 
 ### Controller web variables
@@ -711,10 +755,11 @@ dashboard access.
 - `lib/slack.js` evaluates proactive alerts, queues webhook posts, and builds the
   daily summary.
 - `lib/slack_commands.js` implements read-only `/chiller` Socket Mode commands.
-- `lib/routes.js` serves APIs, static assets, development reloads, and the pGD
-  proxy.
+- `lib/routes.js` serves APIs, static assets, development reloads, the pGD
+  proxy, and the `SETPOINT_WRITE`-gated manual setpoint endpoint.
 - `dashboard.html` is the page markup and CSS. `public/app.js` handles live data,
-  alarms, and history; `public/unit3d.js` renders the model.
+  alarms, history, and the click-to-edit setpoint control;
+  `public/unit3d.js` renders the model.
 - `slack-manifest.yml` is the reproducible Slack app definition.
 - `gd_seal.svg` is vendor artwork served as `/logo.svg` and used on the model.
 - `test.js` is the offline test suite for parsing, cache behavior, page wiring,

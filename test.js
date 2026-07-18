@@ -8,6 +8,15 @@ const { writeSetpoint } = require("./lib/modbus");
 const { commandResponse, trendFromCsv, alarmsText } = require("./lib/slack_commands");
 const dateTime = require("./lib/datetime");
 
+// The requires above pulled in lib/config.js, which loads the REAL .env —
+// including SLACK_WEBHOOK_URL. This suite must be network-silent, so drop the
+// outbound-capable secrets before any test runs (2026-07-18: the setpoint
+// audit posted real Slack messages on every `node test.js`). Paths that
+// legitimately exercise posting inject their own recorder instead.
+delete process.env.SLACK_WEBHOOK_URL;
+delete process.env.SLACK_APP_TOKEN;
+delete process.env.SLACK_BOT_TOKEN;
+
 assert.strictEqual(scale(270), 27.0);
 assert.strictEqual(scale(65516), -2.0); // negative temp wraps correctly
 
@@ -27,7 +36,9 @@ const UNIT3D = require("node:fs").readFileSync(require("node:path").join(__dirna
 const DATETIME = require("node:fs").readFileSync(require("node:path").join(__dirname, "lib/datetime.js"), "utf8");
 
 // "Raw registers" was an anchor here until the debug table was dropped from the page
-for (const anchor of ["glyIn", "comp2", "/datetime.js", "/app.js", "/unit3d.js"]) {
+// (setpDialog/setpInput/"Write setpoint" are the click-to-edit setpoint dialog)
+for (const anchor of ["glyIn", "comp2", "/datetime.js", "/app.js", "/unit3d.js",
+                      "setpDialog", "setpInput", "Write setpoint"]) {
   assert.ok(PAGE.includes(anchor), anchor);
 }
 
@@ -344,7 +355,10 @@ for (const anchor of ["/uplot.js", "ranges"]) {
 for (const anchor of ["/api/all", "/api/log", "W_InTempUser", "W_OutTempUser",
                       // register names keep the controller's spelling; UI labels are spelled out
                       "Comp1Circ1_Dout.Val", "Comp2Circ2_On", "Compressor B",
-                      "X-Log-Loading", "ChillerDateTime", "unit3d"]) {
+                      "X-Log-Loading", "ChillerDateTime", "unit3d",
+                      // setpoint control: POSTs the write, renders only on writesEnabled,
+                      // and shows the boost automation's status lines
+                      "/api/setpoint", "writesEnabled", "setpDialog", "Boost active"]) {
   assert.ok(APP.includes(anchor), anchor);
 }
 for (const anchor of ["/three.js", "unit3d", "chipAnchors"]) {
@@ -405,6 +419,112 @@ const cmdDeps = {
     const r = await writeSetpoint(/** @type {number} */ (bad));
     assert.ok(!r.ok && r.wrote === false && r.readback === null && /outside the hard/.test(r.error || ""), String(bad));
   }
+
+  // POST /api/setpoint — handleSetpoint is driven directly with stub req/res
+  // objects (its deps param exists for exactly this). The success/upstream
+  // paths inject a stub writeSetpoint; the hard-bound refusal path uses the
+  // REAL writeSetpoint, which refuses out-of-range values before any
+  // connection is attempted, so nothing here can touch a controller.
+  const { handleSetpoint } = require("./lib/routes");
+  const { EventEmitter } = require("node:events");
+  const spReq = (body, { method = "POST", ctype = "application/json" } = {}) => {
+    const req = Object.assign(new EventEmitter(), { method, url: "/api/setpoint",
+      headers: ctype ? { "content-type": ctype } : {} });
+    process.nextTick(() => { if (body) req.emit("data", Buffer.from(body)); req.emit("end"); });
+    return /** @type {any} */ (req);
+  };
+  const setp = async (body, opts = {}, deps = undefined) => {
+    const res = { code: 0, body: "", headersSent: false,
+      writeHead(/** @type {number} */ c) { res.code = c; },
+      end(/** @type {string} */ s) { res.body = String(s ?? ""); } };
+    await handleSetpoint(spReq(body, opts), /** @type {any} */ (res), deps);
+    return { code: res.code, json: JSON.parse(res.body) };
+  };
+
+  // Gated: with SETPOINT_WRITE unset (read per request), everything is 403.
+  delete process.env.SETPOINT_WRITE;
+  let sp = await setp('{"setpointF": 36}');
+  assert.ok(sp.code === 403 && !sp.json.ok && /disabled/.test(sp.json.error));
+
+  process.env.SETPOINT_WRITE = "1";
+  sp = await setp('{"setpointF": 36}', { method: "GET" });
+  assert.strictEqual(sp.code, 405);
+  // The content-type requirement doubles as the CSRF gate: a cross-site HTML
+  // form cannot send application/json without a CORS preflight.
+  sp = await setp("setpointF=36", { ctype: "application/x-www-form-urlencoded" });
+  assert.ok(sp.code === 400 && /application\/json/.test(sp.json.error));
+  sp = await setp('{"setpointF": 36}', { ctype: "" }); // no content-type header at all
+  assert.strictEqual(sp.code, 400);
+  assert.strictEqual((await setp('{"setpointF":')).code, 400); // truncated JSON
+  for (const bad of ['{"setpointF": "36"}', '{"setpointF": null}', '{"setpointF": 1e999}', '"36"', "[36]", "{}"]) {
+    sp = await setp(bad);
+    assert.ok(sp.code === 400 && /setpointF/.test(sp.json.error), bad);
+  }
+  sp = await setp(`{"setpointF": 36, "pad": "${"x".repeat(2000)}"}`); // over the 1 KB cap
+  assert.strictEqual(sp.code, 413);
+  // Bounds ride on writeSetpoint's hard clamp: its refusal (nothing touched
+  // the wire) maps to 400 with the reason.
+  sp = await setp('{"setpointF": 80}');
+  assert.ok(sp.code === 400 && /outside the hard/.test(sp.json.error));
+  // Success: value rounded to 0.1°F before the write, readback echoed back.
+  let wroteArg = null;
+  sp = await setp('{"setpointF": 36.04}', {},
+    { writeSetpoint: async (v) => { wroteArg = v; return { ok: true, readback: 36, wrote: true }; } });
+  assert.ok(sp.code === 200 && sp.json.ok === true && sp.json.setpointF === 36);
+  assert.strictEqual(wroteArg, 36);
+  // Upstream failures — connection-level and wrong-register readback — are 502.
+  sp = await setp('{"setpointF": 36}', {},
+    { writeSetpoint: async () => ({ ok: false, readback: null, wrote: true, error: "modbus connect timeout" }) });
+  assert.ok(sp.code === 502 && /timeout/.test(sp.json.error));
+  sp = await setp('{"setpointF": 36}', {},
+    { writeSetpoint: async () => ({ ok: false, readback: 29, wrote: true }) });
+  assert.ok(sp.code === 502 && /29/.test(sp.json.error));
+
+  // The Slack audit must flow through the injectable deps.post, never the
+  // module-level require("./slack").post — on 2026-07-18 the direct call made
+  // this very suite deliver real webhook posts ("setpoint set to 36.0°F", the
+  // fixture above) on every run, because .env's real SLACK_WEBHOOK_URL was in
+  // process.env. The module export is patched here so even a regression can't
+  // deliver anywhere real.
+  const slackMod = require("./lib/slack");
+  const origPost = slackMod.post;
+  /** @type {Array<{text: string}>} */ const leaked = [];
+  slackMod.post = async (/** @type {any} */ b) => { leaked.push(b); return true; };
+  process.env.SLACK_WEBHOOK_URL = "test-dummy-never-fetched";
+  /** @type {Array<{text: string}>} */ const audited = [];
+  const auditDeps = {
+    writeSetpoint: async () => ({ ok: true, readback: 36, wrote: true }),
+    post: async (/** @type {any} */ b) => { audited.push(b); return true; },
+  };
+  sp = await setp('{"setpointF": 36}', {}, auditDeps);
+  assert.strictEqual(sp.code, 200);
+  assert.strictEqual(audited.length, 1); // audit goes through the injected poster…
+  assert.ok(/36\.0°F from the dashboard/.test(audited[0].text) && /54\.0°F/.test(audited[0].text));
+  assert.strictEqual(leaked.length, 0); // …and never through the module-level one
+  // An unverified write (FC6 on the wire, verification failed) still audits —
+  // the hardware may hold the new value, and silence there is worse than noise.
+  sp = await setp('{"setpointF": 36}', {},
+    { ...auditDeps, writeSetpoint: async () => ({ ok: false, readback: 29, wrote: true }) });
+  assert.strictEqual(sp.code, 502);
+  assert.strictEqual(audited.length, 2);
+  assert.ok(/Ambiguous/.test(audited[1].text) && /29\.0°F/.test(audited[1].text));
+  // A hard-bound refusal (wrote:false, nothing on the wire) does not audit.
+  sp = await setp('{"setpointF": 80}', {}, { writeSetpoint, post: auditDeps.post });
+  assert.ok(sp.code === 400 && audited.length === 2);
+  // No webhook configured → no audit at all.
+  delete process.env.SLACK_WEBHOOK_URL;
+  sp = await setp('{"setpointF": 36}', {}, auditDeps);
+  assert.ok(sp.code === 200 && audited.length === 2);
+  // An aborted upload (client vanished mid-body) settles without replying —
+  // before the readBody teardown handlers this promise never resolved at all.
+  const abortReq = Object.assign(new EventEmitter(), { method: "POST", url: "/api/setpoint",
+    headers: { "content-type": "application/json" }, destroyed: true });
+  process.nextTick(() => { abortReq.emit("data", Buffer.from('{"setp')); abortReq.emit("close"); });
+  const abortRes = { code: 0, writeHead(/** @type {number} */ c) { abortRes.code = c; }, end() {} };
+  await handleSetpoint(/** @type {any} */ (abortReq), /** @type {any} */ (abortRes), auditDeps);
+  assert.strictEqual(abortRes.code, 0);
+  slackMod.post = origPost;
+  delete process.env.SETPOINT_WRITE;
 
   // fetch resolves for HTTP failures, so post() must inspect `ok` explicitly.
   assert.strictEqual(await post({}, async () => new Response("no", { status: 503 }), () => {}), false);
