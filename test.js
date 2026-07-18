@@ -4,7 +4,7 @@ const assert = require("node:assert");
 const { scale, ROW, WEB_VARS, UNUSED_WEB_VARS, PAGE, TSTAMP, step, logInsert, logSlice } = require("./chiller_dashboard.js");
 const { post, flushPosts, initialDailyKey } = require("./lib/slack");
 const { decide, reviveState, validBoostThresholds, IDLE: BOOST_IDLE, TRIP_F, BOOST_MARGIN_F } = require("./lib/boost");
-const { writeSetpoint } = require("./lib/modbus");
+const { writeSetpoint, verifySetpoint } = require("./lib/modbus");
 const { commandResponse, trendFromCsv, alarmsText } = require("./lib/slack_commands");
 const dateTime = require("./lib/datetime");
 
@@ -419,6 +419,25 @@ const cmdDeps = {
     const r = await writeSetpoint(/** @type {number} */ (bad));
     assert.ok(!r.ok && r.wrote === false && r.readback === null && /outside the hard/.test(r.error || ""), String(bad));
   }
+
+  // verifySetpoint: the c.pCO's input-register mirror refreshes on its own scan
+  // cycle, so the first readback after a write can be STALE (seen live
+  // 2026-07-18: an accepted 26°F write read back 27°F instantly, 26°F seconds
+  // later — without retries boost.js would have latched writes off as a
+  // wrong-register). Retries until fresh, bounded, returns the last reading.
+  const staleThenFresh = (/** @type {number[]} */ seq) => {
+    let n = 0;
+    return { calls: () => n, read: async () => seq[Math.min(n++, seq.length - 1)] };
+  };
+  let vf = staleThenFresh([26]);
+  assert.strictEqual(await verifySetpoint(vf.read, 26, 6, 0), 26);
+  assert.strictEqual(vf.calls(), 1); // immediate match: no retries
+  vf = staleThenFresh([27, 27, 26]);
+  assert.strictEqual(await verifySetpoint(vf.read, 26, 6, 0), 26);
+  assert.strictEqual(vf.calls(), 3); // stale twice, fresh on the third read
+  vf = staleThenFresh([27]);
+  assert.strictEqual(await verifySetpoint(vf.read, 26, 3, 0), 27);
+  assert.strictEqual(vf.calls(), 3); // never fresh: bounded, reports the mismatch
 
   // POST /api/setpoint — handleSetpoint is driven directly with stub req/res
   // objects (its deps param exists for exactly this). The success/upstream
