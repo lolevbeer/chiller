@@ -310,6 +310,14 @@ pulling the loop down. Once supply recovers to within `BOOST_RESTORE_F` of the
 **original** setpoint for the same dwell, the original setpoint is written back
 and the incident ends.
 
+The dwell exists to ignore transient spikes, but the loop can climb ~1 °F/min —
+fast enough to reach the trip before `BOOST_DWELL_MIN` one-minute samples
+elapse, which is how the firmware alarm has beaten the boost in practice. So a
+margin past `BOOST_URGENT_F` (3 °F of headroom) raises on the **first** sample,
+no dwell. The bypass applies only when a useful raise is actually available: a
+ceiling-bound or write-capped incident still waits out the full dwell, so
+"shutdown may be imminent" alerts can't repeat every poll.
+
 **Writes are off until `SETPOINT_WRITE=1`.** The module is a no-op otherwise,
 and the manual Slack nudge above remains the only mitigation. Safeguards while
 enabled:
@@ -361,6 +369,7 @@ enabled:
 | `SETPOINT_WRITE` | unset | Must be exactly `1` to enable writes |
 | `SETPOINT_WREG` | `1` | HOLDING register written with FC6 (the active-setpoint address per [device findings](#device-findings)); **unconfirmed until probed** |
 | `BOOST_MARGIN_F` | `13` | °F over the current setpoint that arms a raise (shared with the manual nudge) |
+| `BOOST_URGENT_F` | `15` | °F over the setpoint that raises immediately, skipping the dwell (3 °F of headroom before the trip) |
 | `BOOST_DROP_F` | `10` | Raise target is supply − this many °F |
 | `BOOST_RESTORE_F` | `8` | °F over the original setpoint at which the incident ends |
 | `BOOST_CEIL_F` | `45` | Never write a setpoint above this |

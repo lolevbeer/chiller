@@ -195,11 +195,24 @@ boost = brun(ACTIVE, rep(5, bs(47, 33)));
 assert.ok(boost.actions[4].type === "raise" && boost.actions[4].targetF === 37);
 assert.ok(boost.state.writes === 2 && boost.state.originalF === 29);
 
+// Urgent bypass: past URGENT_F (15°F over) the loop is climbing fast enough to
+// hit the setpoint + 18°F trip before the dwell elapses, so the raise happens on
+// the FIRST sample — this is the race that let the firmware alarm beat the boost.
+boost = brun({ ...BOOST_IDLE }, [bs(45.3, 27)]); // 18.3°F over: no waiting
+assert.ok(boost.actions[0].type === "raise" && boost.actions[0].targetF === 35.3);
+assert.strictEqual(brun({ ...BOOST_IDLE }, [bs(42, 27)]).actions[0], null); // exactly 15.0°F: at URGENT_F, dwell still applies
+// The bypass only skips the dwell for an actual raise: a ceiling-bound or
+// write-capped incident still waits out the dwell, so it can't alert every poll.
+assert.deepStrictEqual(brun({ ...BOOST_IDLE }, rep(5, bs(60.1, 44.9))).actions.map((a) => a && a.type),
+  [null, null, null, null, "ceiling-alert"]); // 15.2°F over, but the 45°F ceiling leaves 0.1°F
+assert.deepStrictEqual(brun({ ...BOOST_IDLE, writes: 10 }, rep(5, bs(50, 30))).actions.map((a) => a && a.type),
+  [null, null, null, null, "ceiling-alert"]); // 20°F over, but BOOST_MAX_WRITES spent
+
 // Ceiling: the target clamps to 45°F, and once the clamp can't raise the
 // setpoint any further the action is ceiling-alert (shutdown imminent), which
 // re-arms its own dwell so a standing condition re-alerts once per dwell.
-boost = brun({ ...BOOST_IDLE }, rep(5, bs(57, 40)));
-assert.strictEqual(boost.actions[4].targetF, 45); // min(57−10, 45)
+boost = brun({ ...BOOST_IDLE }, [bs(57, 40)]); // 17°F over: urgent, raises on the first sample
+assert.strictEqual(boost.actions[0].targetF, 45); // min(57−10, 45)
 boost = brun(boost.state, rep(10, bs(59, 45)));
 assert.deepStrictEqual(boost.actions.map((a) => a && a.type),
   [null, null, null, null, "ceiling-alert", null, null, null, null, "ceiling-alert"]);
@@ -207,7 +220,7 @@ assert.strictEqual(boost.state.phase, "active");
 
 // Max writes per incident: an 11th raise is refused with ceiling-alert instead.
 // Custom thresholds (dwell 1, cap 3, no ceiling) keep the incident short.
-const th = { MARGIN_F: 13, DROP_F: 10, RESTORE_F: 8, CEIL_F: 500, DWELL: 1, MAX_WRITES: 3 };
+const th = { MARGIN_F: 13, URGENT_F: 15, DROP_F: 10, RESTORE_F: 8, CEIL_F: 500, DWELL: 1, MAX_WRITES: 3 };
 {
   let st = { ...BOOST_IDLE }; const acts = [];
   for (let i = 0; i < 5; i++) { // supply climbs forever; setpoint tracks each write
@@ -266,7 +279,7 @@ assert.strictEqual(boost.state.writes, 0); // no write budget spent
 // dwell gate, so nothing ever fires — no instant raise, no ceiling-alert spam,
 // and no phantom restore.
 assert.ok(validBoostThresholds(th));
-for (const bad of [{ DWELL: NaN }, { DWELL: 0 }, { DWELL: 2.5 }, { MAX_WRITES: 0 }, { MAX_WRITES: NaN }, { MARGIN_F: NaN }, { CEIL_F: Infinity }]) {
+for (const bad of [{ DWELL: NaN }, { DWELL: 0 }, { DWELL: 2.5 }, { MAX_WRITES: 0 }, { MAX_WRITES: NaN }, { MARGIN_F: NaN }, { URGENT_F: NaN }, { CEIL_F: Infinity }]) {
   assert.ok(!validBoostThresholds({ ...th, ...bad }), JSON.stringify(bad));
 }
 const nanTh = { ...th, DWELL: NaN };
