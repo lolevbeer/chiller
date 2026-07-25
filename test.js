@@ -3,7 +3,7 @@
 const assert = require("node:assert");
 const { scale, ROW, WEB_VARS, UNUSED_WEB_VARS, PAGE, TSTAMP, step, logInsert, logSlice } = require("./chiller_dashboard.js");
 const { post, flushPosts, initialDailyKey } = require("./lib/slack");
-const { decide, reviveState, validBoostThresholds, IDLE: BOOST_IDLE, TRIP_F, BOOST_MARGIN_F } = require("./lib/boost");
+const { decide, reviveState, validBoostThresholds, IDLE: BOOST_IDLE, TRIP_F, BOOST_MARGIN_F, BOOST_URGENT_F } = require("./lib/boost");
 const { writeSetpoint, verifySetpoint } = require("./lib/modbus");
 const { commandResponse, trendFromCsv, alarmsText } = require("./lib/slack_commands");
 const dateTime = require("./lib/datetime");
@@ -16,6 +16,11 @@ const dateTime = require("./lib/datetime");
 delete process.env.SLACK_WEBHOOK_URL;
 delete process.env.SLACK_APP_TOKEN;
 delete process.env.SLACK_BOT_TOKEN;
+// SETPOINT_WRITE too: the nudge conditions read it per-evaluation, so the real
+// .env's value (1 on the deployed box) would gate off the manual-nudge tests
+// below and kill the suite at the first boostPost assertion. Tests that need
+// it set flip it themselves and clean up.
+delete process.env.SETPOINT_WRITE;
 
 assert.strictEqual(scale(270), 27.0);
 assert.strictEqual(scale(65516), -2.0); // negative temp wraps correctly
@@ -166,10 +171,21 @@ assert.deepStrictEqual(seq(...rep(6, { ...OK, regs: { ...REGS_OK, 68: 322, 70: 1
 // Recovers with hysteresis once the margin is a full HYST_F back under the threshold.
 assert.deepStrictEqual(seq(...rep(6, nearTrip(490)), nearTrip(465)).at(-1).filter((p) => p.includes(`${TRIP_TITLE} recovered`)), []); // margin 11.5°F: still within hysteresis
 assert.ok(seq(...rep(6, nearTrip(490)), nearTrip(455)).at(-1).find((p) => p.includes(`${TRIP_TITLE} recovered`))); // margin 10.5°F: clear
+// Urgent nudge tier: past BOOST_URGENT_F (15°F over) the loop can reach the
+// trip before the 5-minute dwell elapses, so the escalated nudge fires on the
+// FIRST sample — with writes disabled it's the only mitigation, and a nudge
+// that arrives after the shutdown is no mitigation at all.
+const URGENT_TITLE = `Glycol supply within ${TRIP_F - BOOST_URGENT_F}°F of the shutdown trip`;
+assert.ok(seq(nearTrip(505))[0].find((p) => p.includes(URGENT_TITLE) && p.includes("RAISE the setpoint to 40.5°F"))); // 15.5°F over: immediate
+assert.deepStrictEqual(seq(...rep(6, nearTrip(500)))
+  .flat().filter((p) => p.includes(URGENT_TITLE)), []); // exactly 15.0°F over: urgent tier stays quiet (dwelled nudge covers it)
+
 // With SETPOINT_WRITE=1 the boost module's own posts are the notification — the
-// manual nudge must not fire at all (the condition reads the env per evaluation).
+// manual nudges (both tiers) must not fire at all (the conditions read the env
+// per evaluation).
 process.env.SETPOINT_WRITE = "1";
 assert.deepStrictEqual(seq(...rep(6, nearTrip(490))).flat().filter((p) => p.includes(TRIP_TITLE)), []);
+assert.deepStrictEqual(seq(...rep(6, nearTrip(505))).flat().filter((p) => p.includes(URGENT_TITLE)), []);
 delete process.env.SETPOINT_WRITE;
 
 // Setpoint boost pure core: decide() drives whole incidents offline, exactly
@@ -207,12 +223,28 @@ assert.deepStrictEqual(brun({ ...BOOST_IDLE }, rep(5, bs(60.1, 44.9))).actions.m
   [null, null, null, null, "ceiling-alert"]); // 15.2°F over, but the 45°F ceiling leaves 0.1°F
 assert.deepStrictEqual(brun({ ...BOOST_IDLE, writes: 10 }, rep(5, bs(50, 30))).actions.map((a) => a && a.type),
   [null, null, null, null, "ceiling-alert"]); // 20°F over, but BOOST_MAX_WRITES spent
+// Mid-incident, urgent raises need one over-margin poll of spacing: a flapping
+// sensor that reads >15°F over each newly-raised setpoint on consecutive polls
+// burns one write per TWO polls, not one per poll — so noise can't drain
+// BOOST_MAX_WRITES in minutes and stand the automation down mid-excursion.
+{
+  let st = { ...BOOST_IDLE }; const acts = [];
+  for (const s of [bs(45.3, 27), bs(51, 35.3), bs(51, 35.3)]) {
+    const r = decide(st, { t: 0, ...s }); st = r.state; acts.push(r.action && r.action.type);
+  }
+  assert.deepStrictEqual(acts, ["raise", null, "raise"]); // spacing poll between the writes
+}
 
 // Ceiling: the target clamps to 45°F, and once the clamp can't raise the
 // setpoint any further the action is ceiling-alert (shutdown imminent), which
 // re-arms its own dwell so a standing condition re-alerts once per dwell.
 boost = brun({ ...BOOST_IDLE }, [bs(57, 40)]); // 17°F over: urgent, raises on the first sample
 assert.strictEqual(boost.actions[0].targetF, 45); // min(57−10, 45)
+// …and the clamp holds on the DWELL path too: a slow climb at 14°F over
+// (between MARGIN_F and URGENT_F) earns its raise through the dwell and still
+// clamps the target to the ceiling.
+boost = brun({ ...BOOST_IDLE }, rep(5, bs(56, 42)));
+assert.strictEqual(boost.actions[4].targetF, 45); // min(56−10, 45)
 boost = brun(boost.state, rep(10, bs(59, 45)));
 assert.deepStrictEqual(boost.actions.map((a) => a && a.type),
   [null, null, null, null, "ceiling-alert", null, null, null, null, "ceiling-alert"]);
@@ -279,7 +311,11 @@ assert.strictEqual(boost.state.writes, 0); // no write budget spent
 // dwell gate, so nothing ever fires — no instant raise, no ceiling-alert spam,
 // and no phantom restore.
 assert.ok(validBoostThresholds(th));
-for (const bad of [{ DWELL: NaN }, { DWELL: 0 }, { DWELL: 2.5 }, { MAX_WRITES: 0 }, { MAX_WRITES: NaN }, { MARGIN_F: NaN }, { URGENT_F: NaN }, { CEIL_F: Infinity }]) {
+// The threshold ordering MARGIN_F < URGENT_F < TRIP_F is validated too: an
+// URGENT_F at/below MARGIN_F would gut the dwell (every excursion raises on
+// the first sample) and one at/past TRIP_F could never beat the firmware trip.
+for (const bad of [{ DWELL: NaN }, { DWELL: 0 }, { DWELL: 2.5 }, { MAX_WRITES: 0 }, { MAX_WRITES: NaN }, { MARGIN_F: NaN }, { URGENT_F: NaN }, { CEIL_F: Infinity },
+  { URGENT_F: 13 }, { URGENT_F: TRIP_F }]) {
   assert.ok(!validBoostThresholds({ ...th, ...bad }), JSON.stringify(bad));
 }
 const nanTh = { ...th, DWELL: NaN };

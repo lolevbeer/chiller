@@ -259,6 +259,7 @@ that an incident recovered.
 | Critical glycol outlet | `SLACK_CRIT_F=45` °F | `SLACK_DWELL_MIN=5` min |
 | High glycol outlet | `SLACK_HIGH_F=5` °F above setpoint | `SLACK_DWELL_MIN=5` min |
 | Shutdown-trip nudge | Supply more than `BOOST_MARGIN_F=13` °F above setpoint (5 °F short of the firmware's setpoint + 18 °F shutdown) — recommends temporarily raising the setpoint to `BOOST_DROP_F=10` °F below the current supply; silenced entirely when `SETPOINT_WRITE=1` because the boost module posts its own actions | `SLACK_DWELL_MIN=5` min |
+| Shutdown-trip nudge (urgent) | Supply more than `BOOST_URGENT_F=15` °F above setpoint (3 °F short of the shutdown) — same recommendation, but the loop is climbing too fast for the dwelled nudge to arrive before the trip; silenced when `SETPOINT_WRITE=1` like the tier above | Immediate |
 | Glycol freeze floor | Below `SLACK_FREEZE_F=20` °F | 5 min |
 | No flow | Pump running while its flow switch reports no flow | 2 min |
 | Not cooling | Compressor running off setpoint without a falling outlet trend | `SLACK_NOTCOOL_MIN=20` min |
@@ -316,7 +317,10 @@ elapse, which is how the firmware alarm has beaten the boost in practice. So a
 margin past `BOOST_URGENT_F` (3 °F of headroom) raises on the **first** sample,
 no dwell. The bypass applies only when a useful raise is actually available: a
 ceiling-bound or write-capped incident still waits out the full dwell, so
-"shutdown may be imminent" alerts can't repeat every poll.
+"shutdown may be imminent" alerts can't repeat every poll. Mid-incident, urgent
+raises are spaced at least one over-margin poll apart, so a flapping sensor
+can't burn a write on every consecutive poll and drain `BOOST_MAX_WRITES` while
+the real excursion is still developing.
 
 **Writes are off until `SETPOINT_WRITE=1`.** The module is a no-op otherwise,
 and the manual Slack nudge above remains the only mitigation. Safeguards while
@@ -331,9 +335,12 @@ enabled:
   comparisons happen in integer tenths (the controller's native x10 resolution),
   so float noise can never move a boundary.
 - The `BOOST_*` thresholds are validated at startup: if any fails to parse to a
-  usable number (e.g. `BOOST_DWELL_MIN=5m`), the boost refuses to start rather
-  than run with degraded gates — and the dwell gates in `decide()` additionally
-  fail safe (nothing fires) under a `NaN` dwell.
+  usable number (e.g. `BOOST_DWELL_MIN=5m`), or the ordering
+  `BOOST_MARGIN_F` < `BOOST_URGENT_F` < 18 °F is broken (below `BOOST_MARGIN_F`
+  the bypass would gut the dwell; at 18 °F or above it could never beat the
+  firmware trip), the boost refuses to start rather than run with degraded
+  gates — and the dwell gates in `decide()` additionally fail safe (nothing
+  fires) under a `NaN` dwell.
 - If the setpoint moves more than 0.2 °F (two register counts) from what the
   module last wrote, a human intervened: the automation posts an abort naming
   the pre-boost setpoint and stands down. A manual change made through the
