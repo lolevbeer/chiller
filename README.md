@@ -9,9 +9,9 @@ Slack alerts, and read-only Slack commands.
 Mac on home LAN
  │  Ubiquiti Teleport + teleport_split.sh
  ▼
-site LAN 192.168.1.0/24
+site LAN 192.168.4.0/22
  ├── Raspberry Pi `chiller` — dashboard and Slack service
- └── Carel c.pCO 192.168.1.69
+ └── Carel c.pCO 192.168.6.86
       ├── Modbus TCP :502 — live INPUT registers
       └── HTTP :80 — web variables, alarms, datalogger, and virtual pGD
 ```
@@ -77,7 +77,7 @@ the code. Environment variables set by the service or shell are also supported.
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `CHILLER_IP` | `192.168.1.69` | Controller address |
+| `CHILLER_IP` | `192.168.6.86` | Controller address |
 | `CHILLER_REGS` | `162` | Number of INPUT registers to read: addresses 0–161 |
 | `PORT` | `8000` | Dashboard listen port |
 | `LOG_FILE` | `log_cache.csv` beside the code | Persistent seven-day datalogger cache |
@@ -110,7 +110,7 @@ Wants=network-online.target
 
 [Service]
 WorkingDirectory=/home/pi/chiller
-Environment=CHILLER_IP=192.168.1.69
+Environment=CHILLER_IP=192.168.6.86
 Environment=PORT=80
 EnvironmentFile=-/home/pi/chiller/.env
 AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -695,11 +695,11 @@ After Teleport connects, run:
 
 ```sh
 ./teleport_split.sh
-ping 192.168.1.69
+ping 192.168.6.86
 ```
 
 The script finds the `utunN` interface that owns `0/1`, removes both half-range
-routes, and adds `192.168.1.0/24` through that tunnel. Internet traffic then uses
+routes, and adds `192.168.4.0/22` through that tunnel. Internet traffic then uses
 the home default route. WiFiman reinstalls its routes after every reconnect, so
 rerun the script each time.
 
@@ -726,7 +726,7 @@ NAT-traverses the connection. Troubleshooting:
 ### Abandoned WireGuard path
 
 A UniFi WireGuard server on UDP 51830 (51820 is used by Teleport) and a client
-with `AllowedIPs = 192.168.1.0/24` were configured but cannot handshake. The
+with `AllowedIPs = 192.168.4.0/22` were configured but cannot handshake. The
 UniFi WAN is `10.1.10.180` behind a Comcast Business gateway at `10.1.10.1`; the
 site has a public address rather than CGNAT, but the required port forward cannot
 currently be added to the Comcast gateway. Revisit this only if Comcast adds the

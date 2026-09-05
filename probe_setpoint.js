@@ -17,7 +17,7 @@
 // Run with no flags and it refuses and prints usage — an accidental
 // `node probe_setpoint.js` touches nothing. Exits non-zero on connect failure.
 //
-// Usage:  CHILLER_IP=192.168.1.69 node probe_setpoint.js --read
+// Usage:  CHILLER_IP=192.168.6.86 node probe_setpoint.js --read
 //         SETPOINT_WREG=1 node probe_setpoint.js --write --yes-i-am-sure
 const ModbusRTU = /** @type {typeof import("modbus-serial").default} */ (/** @type {unknown} */ (require("modbus-serial")));
 const { HOST } = require("./lib/config");

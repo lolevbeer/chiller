@@ -8,7 +8,7 @@ import csv, io, time, os
 import urllib.request
 from pymodbus.client import ModbusTcpClient
 
-HOST = os.environ.get("CHILLER_IP", "192.168.1.69")
+HOST = os.environ.get("CHILLER_IP", "192.168.6.86")
 ROUNDS = int(os.environ.get("ROUNDS", "20"))
 INTERVAL = float(os.environ.get("INTERVAL", "3"))
 NREGS = 80  # INPUT block of interest

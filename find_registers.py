@@ -1,11 +1,11 @@
 # Locate the Modbus_FB supervisor block by matching known current values from the
 # c.pCO web page against a register scan. The web "ID" column is the internal PLC
 # variable index, NOT the Modbus address — this finds the real addresses.
-# Run:  CHILLER_IP=192.168.1.69 ./.venv/bin/python find_registers.py
+# Run:  CHILLER_IP=192.168.6.86 ./.venv/bin/python find_registers.py
 import os
 from pymodbus.client import ModbusTcpClient
 
-HOST = os.environ.get("CHILLER_IP", "192.168.1.69")
+HOST = os.environ.get("CHILLER_IP", "192.168.6.86")
 MAXADDR = int(os.environ.get("SCAN_MAX", "2000"))  # PDU addresses 0..MAXADDR
 
 # Distinctive current values pulled from the Modbus_FB block on the web page.

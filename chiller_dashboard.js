@@ -5,7 +5,7 @@
 // control (POST /api/setpoint in lib/routes.js) writes it on operator request.
 // Cloudflare Access sits in front for auth; this app has no login of its own by design.
 // Run:  npm install
-//       CHILLER_IP=192.168.1.69 node chiller_dashboard.js   (PORT defaults to 8000)
+//       CHILLER_IP=192.168.6.86 node chiller_dashboard.js   (PORT defaults to 8000)
 //
 // Entry point only — the pieces live in lib/ (modbus, webvars, logcache, slack,
 // routes); this file wires them together and re-exports the test surface.
