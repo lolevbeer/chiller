@@ -1,7 +1,7 @@
 // Offline self-check for scale/sign logic, getvar.csv row parsing, and page wiring
 // (no device needed).  Run: node test.js
 const assert = require("node:assert");
-const { scale, ROW, WEB_VARS, UNUSED_WEB_VARS, PAGE, TSTAMP, step, logInsert, logSlice } = require("./chiller_dashboard.js");
+const { serve, scale, ROW, WEB_VARS, UNUSED_WEB_VARS, PAGE, TSTAMP, step, logInsert, logSlice } = require("./chiller_dashboard.js");
 const { post, flushPosts, initialDailyKey } = require("./lib/slack");
 const { decide, reviveState, validBoostThresholds, IDLE: BOOST_IDLE, TRIP_F, BOOST_MARGIN_F, BOOST_URGENT_F } = require("./lib/boost");
 const { writeSetpoint, verifySetpoint } = require("./lib/modbus");
@@ -634,5 +634,36 @@ const cmdDeps = {
     assert.ok(!/\p{Extended_Pictographic}/u.test(text), text);
     assert.ok(!/\d{4}-\d{2}-\d{2}T/.test(text), text);
   }
+
+  // step(): a cleared controller alarm drops its dwell counter, so a re-fire
+  // hours later is a fresh incident, not a continuation of the old one.
+  {
+    const X = [{ name: "High glycol temp", since: "2026-07-13T01:00:00+00:00" }];
+    const at = (/** @type {number} */ t, /** @type {any[]} */ active) => ({ t, regs: REGS_OK, web: WEB_OK, alarms: { active } });
+    let c = { active: new Map(), counts: new Map(), hist: [] };
+    c = step(c, at(0, X));
+    c = step(c, at(60e3, []));
+    c = step(c, at(3 * 3600e3, X));
+    const refire = c.posts.find((p) => p.includes("High glycol temp"));
+    assert.ok(refire && refire.includes("Active for 0 sec"), refire);
+  }
+
+  // serve(): refuses cross-origin writes and dot-pair paths before routing,
+  // and stamps the hardening headers on every response.
+  const fakeRes = () => ({ code: 0, headers: /** @type {Record<string, string>} */ ({}), headersSent: false,
+    setHeader(/** @type {string} */ k, /** @type {string} */ v) { this.headers[k] = v; },
+    writeHead(/** @type {number} */ c) { this.code = c; this.headersSent = true; }, end() {} });
+  const guarded = (/** @type {object} */ req) => { const r = fakeRes(); serve(/** @type {any} */ (req), /** @type {any} */ (r)); return r; };
+  const evil = guarded({ method: "POST", url: "/pgd/", headers: { host: "chiller.lan", origin: "https://evil.example" } });
+  assert.strictEqual(evil.code, 403);
+  assert.strictEqual(evil.headers["X-Content-Type-Options"], "nosniff");
+  assert.strictEqual(guarded({ method: "POST", url: "/pgd/", headers: { host: "chiller.lan", origin: "null" } }).code, 403);
+  assert.strictEqual(guarded({ method: "GET", url: "/pgd/../cgi-bin/x", headers: { host: "chiller.lan" } }).code, 400);
+  assert.strictEqual(guarded({ method: "GET", url: "/pgd/%2E%2e/x", headers: { host: "chiller.lan" } }).code, 400);
+  // a same-origin write gets past the guard to the route (404 here, not 403)
+  const same = fakeRes();
+  await new Promise((done) => { same.end = () => done(undefined); serve(/** @type {any} */ ({ method: "POST", url: "/nope",
+    headers: { host: "chiller.lan", origin: "https://chiller.lan" } }), /** @type {any} */ (same)); });
+  assert.strictEqual(same.code, 404);
   console.log("ok");
 })().catch((e) => { console.error(e); process.exitCode = 1; });

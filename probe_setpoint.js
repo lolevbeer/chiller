@@ -116,7 +116,7 @@ function printTable({ input, holding }) {
     process.exit(0);
   } catch (e) {
     console.error("probe failed:", e instanceof Error ? e.message : String(e));
-    process.exit(1); // non-zero on connect failure — do not copy find_registers.py's exit-0 wart
+    process.exit(1); // non-zero on connect failure
   } finally {
     try { c.destroy(); } catch {}
   }

@@ -29,8 +29,37 @@ process.on("unhandledRejection", (e) => console.error("unhandled rejection:", e)
 
 const PORT = Number(process.env.PORT || 8000);
 
+// Guards in front of lib/routes.js's handle(). The app has no login (trusted
+// LAN / Cloudflare Access), so these close the holes that don't need one:
+//  - Cross-site writes: a foreign page can make the viewer's browser POST here.
+//    /api/setpoint's JSON-only check stops forms, but /pgd/ forwards keypresses
+//    as plain form POSTs. Browsers send Origin on every POST, so any write
+//    whose Origin isn't this host is refused.
+//  - "..": /pgd/ forwards req.url verbatim, and the controller may resolve
+//    /pgd/../ into its CGI tree. No real URL here contains a dot pair.
+//  - A handler that throws answers 500 instead of leaving the socket hanging.
+/** @param {import("http").IncomingMessage} req @param {import("http").ServerResponse} res */
+function serve(req, res) {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN"); // the page iframes /pgd/ — same origin only
+  const reject = (/** @type {number} */ code, /** @type {string} */ msg) => {
+    res.writeHead(code, { "Content-Type": "text/plain" });
+    res.end(msg);
+  };
+  const origin = req.headers.origin, host = req.headers.host;
+  if (req.method !== "GET" && req.method !== "HEAD" && origin &&
+      origin !== `http://${host}` && origin !== `https://${host}`)
+    return reject(403, "cross-origin request refused");
+  if (/(\.|%2e){2}/i.test(req.url || "")) return reject(400, "bad path");
+  handle(req, res).catch((/** @type {unknown} */ e) => {
+    console.error("request failed:", req.method, req.url, e);
+    if (!res.headersSent) res.writeHead(500, { "Content-Type": "text/plain" });
+    res.end("internal error");
+  });
+}
+
 if (require.main === module) {
-  http.createServer(handle).listen(PORT, "0.0.0.0", () =>
+  http.createServer(serve).listen(PORT, "0.0.0.0", () =>
     console.log(`chiller dashboard on http://0.0.0.0:${PORT}  (chiller ${HOST})`)
   );
   startSlack(); // no-op unless SLACK_WEBHOOK_URL is set
@@ -42,4 +71,4 @@ if (require.main === module) {
   logLoop().catch((e) => { console.error("log loop crashed:", e); process.exit(1); });
 }
 
-module.exports = { scale, read, readWeb, readLog, TSTAMP, LABELS, WEB_VARS, UNUSED_WEB_VARS, ROW, PAGE, step, logInsert, logSlice };
+module.exports = { serve, scale, read, readWeb, readLog, TSTAMP, LABELS, WEB_VARS, UNUSED_WEB_VARS, ROW, PAGE, step, logInsert, logSlice };

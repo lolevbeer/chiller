@@ -2,7 +2,7 @@
 # correlation: repeatedly sample the controller's own getvar.csv (name, desc,
 # type, live value) together with a register dump, and pair a register with a
 # variable only if they track each other across EVERY sample. Kills the value
-# collisions that fool single-snapshot matching (find_registers.py).
+# collisions that fool single-snapshot matching.
 # Run with the chiller RUNNING so values drift:  ./.venv/bin/python correlate_registers.py
 import csv, io, time, os
 import urllib.request
