@@ -720,9 +720,14 @@ ping 192.168.6.86
 ```
 
 The script finds the `utunN` interface that owns `0/1`, removes both half-range
-routes, and adds `192.168.4.0/22` through that tunnel. Internet traffic then uses
+routes, and adds `192.168.6.0/24` through that tunnel. Internet traffic then uses
 the home default route. WiFiman reinstalls its routes after every reconnect, so
 rerun the script each time.
+
+The route is a `/24`, not the site's whole `/22`, because the home LAN is also
+`192.168.4.0/22`: a `/22` tunnel route collides with the home interface's own
+and never takes effect. The controller (`.6.86`) and Pi (`.6.22`) are both in
+`192.168.6.x`, and the more specific `/24` wins over the home `/22`.
 
 Observed tunnel details from 2026-07-04:
 
