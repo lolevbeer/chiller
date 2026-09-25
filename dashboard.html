@@ -156,6 +156,11 @@ h2 .cst { color: var(--dim); font-weight: 400; }
   background: color-mix(in srgb, var(--bad) 12%, transparent);
   border-left: 3px solid var(--bad); border-radius: 4px; padding: 8px 12px; margin-bottom: 8px; }
 #chart .log-stopped strong { color: var(--bad); }
+#chart .log-stopped .rearm { font: 500 12.5px "Inter", sans-serif; margin: 6px 8px 0 0;
+  padding: 5px 12px; border-radius: 7px; cursor: pointer; border: 1px solid var(--bad);
+  background: none; color: var(--ink); }
+#chart .log-stopped .rearm:disabled { opacity: .5; cursor: default; }
+#chart .log-stopped .rearm-note { color: var(--mut); }
 /* uPlot's legend is a <table> of stroke swatches by default, which reads as a form.
    Reflow it into a centered row of pills: a color dot (the series' own stroke, which
    uPlot inlines as a border-color) and the live value. */

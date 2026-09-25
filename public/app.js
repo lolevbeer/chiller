@@ -333,6 +333,33 @@ let histGaps = []; // logging-stopped spans in the current range, set by loadHis
 // whoever sees the frozen chart knows how to fix it without hunting for the steps.
 const RESTART_STEPS = "On the controller display (pGD): hold Alarm + Enter ~3 s for the " +
   "system menu → LOGGER → RESTART LOGS. Logging re-arms even if it says “no logs to restart.”";
+// The banner's "Re-arm logger" button does those steps for you: POST
+// /api/rearm-logger drives the keypad (lib/pgd.js), refusing while an alarm
+// stands. The banner is rebuilt on every 60 s redraw, so the last result lives
+// here rather than in the DOM.
+let rearmNote = "";
+const showRearmNote = () => {
+  const n = $("chart").querySelector(".rearm-note");
+  if (n) n.textContent = rearmNote; // server text → textContent, never markup
+};
+$("chart").addEventListener("click", async (e) => {
+  const btn = e.target instanceof Element && e.target.closest(".rearm");
+  if (!btn) return;
+  btn.disabled = true;
+  rearmNote = "Re-arming… this takes about 2 to 3 minutes."; // measured 2026-09-24: ~11 s per screen read, ~12 reads
+  showRearmNote();
+  try {
+    const res = await fetch("/api/rearm-logger", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: "{}" });
+    const j = await res.json().catch(() => null);
+    rearmNote = (j && j.message) || `Re-arm failed (HTTP ${res.status})`;
+  } catch {
+    rearmNote = "Network error: the re-arm may not have reached the server.";
+  } finally {
+    btn.disabled = false;
+    showRearmNote();
+  }
+});
 
 let histChart, histHours = 6;
 function drawHist(data) {
@@ -351,7 +378,9 @@ function drawHist(data) {
     const b = document.createElement("div");
     b.className = "log-stopped";
     b.innerHTML = `<strong>Datalogger stopped</strong> — no new rows for ${age(Date.now() - last * 1000)}. ` +
-      `The onboard log halts on any alarm and won’t restart on its own. ${RESTART_STEPS}`;
+      `The onboard log halts on any alarm and won’t restart on its own. ${RESTART_STEPS} ` +
+      `<button class="rearm" type="button">Re-arm logger</button><span class="rearm-note"></span>`;
+    b.querySelector(".rearm-note").textContent = rearmNote;
     el.appendChild(b);
   }
   const css = getComputedStyle(document.documentElement);

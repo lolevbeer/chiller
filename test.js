@@ -6,6 +6,7 @@ const { post, flushPosts, initialDailyKey } = require("./lib/slack");
 const { decide, reviveState, validBoostThresholds, IDLE: BOOST_IDLE, TRIP_F, BOOST_MARGIN_F, BOOST_URGENT_F } = require("./lib/boost");
 const { writeSetpoint, verifySetpoint } = require("./lib/modbus");
 const { commandResponse, trendFromCsv, alarmsText } = require("./lib/slack_commands");
+const { rearmLogger } = require("./lib/pgd");
 const dateTime = require("./lib/datetime");
 
 // The requires above pulled in lib/config.js, which loads the REAL .env —
@@ -105,7 +106,9 @@ assert.strictEqual(p1.length, 1);
 assert.ok(p1[0].includes("High glycol temp") && p1[0].includes("Jul 12, 2026 at 9:00 AM"));
 assert.ok(!p1[0].includes("2026-07-12T"));
 assert.deepStrictEqual(p2, []); // still standing — no repeat. This is the deduplication.
-assert.ok(p3[0].includes("High glycol temp recovered") && p3[0].includes("lasted 2 min"));
+assert.ok(p3[0].includes("Resolved: High glycol temp") && p3[0].includes("lasted 2 min"));
+// Alerts are plain text: a severity label, no emoji.
+assert.ok(p1[0].startsWith("*Critical: High glycol temp*") && !/\p{Extended_Pictographic}/u.test(p1[0] + p3[0]));
 
 // A failed alarm read is not a recovery: the fault is held until a read says it cleared
 assert.deepStrictEqual(seq(alarmed, { ...OK, alarms: null })[1], []);
@@ -119,10 +122,10 @@ assert.deepStrictEqual(seq({ ...OK, web: { ...WEB_OK, "LEL A %": 9 } })[0], []);
 // the trip point) — a leak hovering on the threshold must not flap.
 const leak = (pct) => ({ ...OK, web: { ...WEB_OK, "LEL A %": pct } });
 assert.deepStrictEqual(seq(leak(12), leak(8))[1], []);
-assert.ok(seq(leak(12), leak(8), leak(3))[2][0].includes("recovered"));
+assert.ok(seq(leak(12), leak(8), leak(3))[2][0].includes("Resolved:"));
 // A whole getvar.csv failure is unknown, not proof that a safety cleared.
 assert.deepStrictEqual(seq(leak(12), { ...OK, web: null })[1], []);
-assert.ok(seq(leak(12), { ...OK, web: null }, leak(3))[2][0].includes("recovered"));
+assert.ok(seq(leak(12), { ...OK, web: null }, leak(3))[2][0].includes("Resolved:"));
 
 // A leak sensor that drops out of the getvar response is itself a fault (2-poll dwell)
 const { "LEL B %": _b, ...blind } = WEB_OK;
@@ -146,7 +149,7 @@ assert.deepStrictEqual(seq(...rep(5, hot), OK, ...rep(5, hot)).flat(), []);
 const warm = (t) => ({ ...OK, regs: { ...REGS_OK, 68: t } });
 assert.deepStrictEqual(seq(...rep(6, hot), warm(330))[6], []); // 33°F: inside the band, not clear of it
 const recov = seq(...rep(6, hot), warm(310))[6]; // 31°F: clear
-assert.ok(recov[0].includes("High glycol supply temperature recovered") && recov[0].includes("lasted 6 min"));
+assert.ok(recov[0].includes("Resolved: High glycol supply temperature") && recov[0].includes("lasted 6 min"));
 // A register timeout likewise cannot clear an active temperature condition.
 assert.deepStrictEqual(seq(...rep(6, hot), { ...OK, regs: null })[6], []);
 
@@ -169,8 +172,8 @@ assert.deepStrictEqual(seq(...rep(6, nearTrip(480))).flat().filter((p) => p.incl
 assert.deepStrictEqual(seq(...rep(6, { ...OK, regs: { ...REGS_OK, 68: 322, 70: 192 } }))
   .flat().filter((p) => p.includes(TRIP_TITLE)), []);
 // Recovers with hysteresis once the margin is a full HYST_F back under the threshold.
-assert.deepStrictEqual(seq(...rep(6, nearTrip(490)), nearTrip(465)).at(-1).filter((p) => p.includes(`${TRIP_TITLE} recovered`)), []); // margin 11.5°F: still within hysteresis
-assert.ok(seq(...rep(6, nearTrip(490)), nearTrip(455)).at(-1).find((p) => p.includes(`${TRIP_TITLE} recovered`))); // margin 10.5°F: clear
+assert.deepStrictEqual(seq(...rep(6, nearTrip(490)), nearTrip(465)).at(-1).filter((p) => p.includes(`Resolved: ${TRIP_TITLE}`)), []); // margin 11.5°F: still within hysteresis
+assert.ok(seq(...rep(6, nearTrip(490)), nearTrip(455)).at(-1).find((p) => p.includes(`Resolved: ${TRIP_TITLE}`))); // margin 10.5°F: clear
 // Urgent nudge tier: past BOOST_URGENT_F (15°F over) the loop can reach the
 // trip before the 5-minute dwell elapses, so the escalated nudge fires on the
 // FIRST sample — with writes disabled it's the only mitigation, and a nudge
@@ -373,7 +376,24 @@ assert.ok(!seq(...falling).flat().join("\n").includes("not cooling"));
 const down = { regs: null, web: null, alarms: null };
 assert.deepStrictEqual(seq(down)[0], []);
 assert.ok(seq(down, down)[1][0].includes("Chiller unreachable"));
-assert.ok(seq(down, down, OK)[2][0].includes("Chiller unreachable recovered"));
+assert.ok(seq(down, down, OK)[2][0].includes("Resolved: Chiller unreachable"));
+
+// Datalogger stopped: the newest log row is over 15 min old (seq's t starts at 0).
+const logStale = { ...OK, logNewest: -20 * 60000 };
+const logFresh = { ...OK, logNewest: 60 * 60000 }; // clock runs fast: a live tail sits ahead of now
+const logPosts = seq(logStale, logStale);
+assert.deepStrictEqual(logPosts[0], []); // two polls, like offline
+assert.ok(logPosts[1][0].startsWith("*Warning: Datalogger stopped*") && logPosts[1][0].includes("RESTART LOGS"));
+assert.deepStrictEqual(seq(logFresh, logFresh).flat(), []);
+// A standing alarm stops the log by design; the alarm alert already covers it,
+// and re-arming would only stop again. The logger alert waits for the clear.
+const logAlarmed = { ...logStale, alarms: { active: [{ name: "High glycol temp", since: "2026-07-12T09:00:00" }] } };
+assert.ok(!seq(logAlarmed, logAlarmed).flat().some((p) => p.includes("Datalogger")));
+// Unknown is not healthy: a cache still backfilling (logNewest null) or an
+// offline controller must neither raise nor resolve it.
+assert.ok(!seq(logStale, logStale, { ...OK, logNewest: null }, { ...logStale, regs: null })
+  .flat().some((p) => p.includes("Resolved: Datalogger")));
+assert.ok(seq(logStale, logStale, logFresh)[2].some((p) => p.includes("Resolved: Datalogger stopped")));
 
 // log cache: chunks merge deduped on timestamp, stay sorted; slice = header + window.
 // Timestamps built relative to now — logInsert trims rows older than its 7 d window.
@@ -575,7 +595,7 @@ const cmdDeps = {
     { ...auditDeps, writeSetpoint: async () => ({ ok: false, readback: 29, wrote: true }) });
   assert.strictEqual(sp.code, 502);
   assert.strictEqual(audited.length, 2);
-  assert.ok(/Ambiguous/.test(audited[1].text) && /29\.0°F/.test(audited[1].text));
+  assert.ok(/Unverified/.test(audited[1].text) && /29\.0°F/.test(audited[1].text));
   // A hard-bound refusal (wrote:false, nothing on the wire) does not audit.
   sp = await setp('{"setpointF": 80}', {}, { writeSetpoint, post: auditDeps.post });
   assert.ok(sp.code === 400 && audited.length === 2);
@@ -596,6 +616,13 @@ const cmdDeps = {
 
   // fetch resolves for HTTP failures, so post() must inspect `ok` explicitly.
   assert.strictEqual(await post({}, async () => new Response("no", { status: 503 }), () => {}), false);
+  // Labelled messages go out as a colored attachment; others pass through untouched.
+  /** @type {any[]} */ const sent = [];
+  const capture = async (/** @type {any} */ _u, /** @type {any} */ o) => { sent.push(JSON.parse(o.body)); return new Response("ok"); };
+  await post({ text: "*Critical: Propane detected*\nx" }, capture);
+  await post({ text: "plain" }, capture);
+  assert.deepStrictEqual(sent[0], { attachments: [{ color: "#d00000", text: "*Critical: Propane detected*\nx", fallback: "*Critical: Propane detected*\nx" }] });
+  assert.deepStrictEqual(sent[1], { text: "plain" });
 
   // A failed edge stays at the head of the outbox. Once Slack recovers, both it
   // and the later edge are delivered in order instead of being consumed.
@@ -634,5 +661,108 @@ const cmdDeps = {
     assert.ok(!/\p{Extended_Pictographic}/u.test(text), text);
     assert.ok(!/\d{4}-\d{2}-\d{2}T/.test(text), text);
   }
+
+  // Datalogger re-arm drives the live keypad, so it is tested against a fake
+  // pGD modelled on the menus recorded on 2026-09-24. The property that matters
+  // most: Enter is only ever pressed on exactly "RESTART LOGS" (WIPE LOGS sits
+  // two rows below it), and the keypad always ends on the main screen.
+  const SYS_MENU = ["INFORMATION", "SETTINGS", "APPLICATION", "UPGRADE", "LOGGER", "DIAGNOSTICS"];
+  const LOG_MENU = ["EXPORT LOGS", "RESTART LOGS", "FLUSH LOGS", "WIPE LOGS"];
+  const fakePad = ({ at = "home", sys = SYS_MENU, downBy = 1 } = {}) => {
+    const st = { at, idx: 0, entered: /** @type {string[]} */ ([]), keys: /** @type {number[]} */ ([]) };
+    const menu = () => (st.at === "sys" ? sys : LOG_MENU);
+    const pad8 = (/** @type {string[]} */ r) => [...r, ...Array(8).fill("")].slice(0, 8);
+    return { st,
+      async screen() {
+        if (st.at === "home") return pad8(["09/24/26 21:28       M", "Set:  27.0°F PmpA 13.6", "", "", "", "", "", "Stand by"]);
+        if (st.at === "result") return pad8(["No logs to restart"]);
+        return pad8(menu().map((t, i) => (i === st.idx ? "> " : "  ") + t));
+      },
+      async key(/** @type {number} */ code) {
+        st.keys.push(code);
+        if (code === 0) { st.at = { home: "home", sys: "home", logger: "sys", result: "logger" }[st.at]; st.idx = 0; }
+        else if (code === 130 && st.at === "home") { st.at = "sys"; st.idx = 0; }
+        else if (code === 15 && (st.at === "sys" || st.at === "logger")) st.idx = Math.min(st.idx + downBy, menu().length - 1);
+        else if (code === 13 && st.at === "sys" && sys[st.idx] === "LOGGER") { st.at = "logger"; st.idx = 0; }
+        else if (code === 13 && (st.at === "sys" || st.at === "logger")) {
+          st.entered.push(menu()[st.idx]);
+          if (menu()[st.idx] === "RESTART LOGS") st.at = "result";
+        }
+      },
+    };
+  };
+  /** @type {string[]} */ const rearmAudit = [];
+  const rearmDeps = (/** @type {any} */ pad, extra = {}) => ({ pad, source: "the test suite",
+    readAlarms: async () => ({ active: [], recent: [] }),
+    post: async (/** @type {any} */ b) => { rearmAudit.push(b.text); return true; }, ...extra });
+
+  let rpad = fakePad();
+  let rr = await rearmLogger(rearmDeps(rpad));
+  assert.ok(rr.ok, rr.message);
+  assert.deepStrictEqual(rpad.st.entered, ["RESTART LOGS"]);
+  assert.strictEqual(rpad.st.at, "home");
+  assert.ok(rearmAudit.at(-1).startsWith("*Notice: Datalogger re-armed from the test suite*"));
+  // Keypad left deep in a menu: it backs out to the main screen first.
+  rpad = fakePad({ at: "logger" });
+  rr = await rearmLogger(rearmDeps(rpad));
+  assert.ok(rr.ok, rr.message);
+  assert.deepStrictEqual(rpad.st.entered, ["RESTART LOGS"]);
+  assert.strictEqual(rpad.st.at, "home");
+  // A menu without LOGGER (different firmware): no Enter pressed, back home, reported.
+  rpad = fakePad({ sys: SYS_MENU.filter((x) => x !== "LOGGER") });
+  rr = await rearmLogger(rearmDeps(rpad));
+  assert.ok(!rr.ok);
+  assert.deepStrictEqual(rpad.st.entered, []);
+  assert.strictEqual(rpad.st.at, "home");
+  assert.ok(rearmAudit.at(-1).startsWith("*Warning: Datalogger re-arm from the test suite failed*"));
+  // Selection jumps two rows per Down (someone else on the keypad): it skips
+  // past RESTART LOGS to WIPE LOGS and must NOT press Enter on anything.
+  rpad = fakePad({ downBy: 2 });
+  rr = await rearmLogger(rearmDeps(rpad));
+  assert.ok(!rr.ok);
+  assert.deepStrictEqual(rpad.st.entered, []);
+  assert.strictEqual(rpad.st.at, "home");
+  // A standing alarm would stop the log again, and an unknown alarm state is
+  // not a clean one: both refuse before a single key is sent.
+  rpad = fakePad();
+  rr = await rearmLogger(rearmDeps(rpad, { readAlarms: async () => ({ active: [{ name: "High glycol temp", since: "x" }], recent: [] }) }));
+  assert.ok(!rr.ok && /High glycol temp/.test(rr.message));
+  assert.deepStrictEqual(rpad.st.keys, []);
+  rr = await rearmLogger(rearmDeps(rpad, { readAlarms: async () => null }));
+  assert.ok(!rr.ok);
+  assert.deepStrictEqual(rpad.st.keys, []);
+  // One run at a time: the button and /chiller rearm share one keypad.
+  rpad = fakePad();
+  const [ra, rb] = await Promise.all([rearmLogger(rearmDeps(rpad)), rearmLogger(rearmDeps(rpad))]);
+  assert.ok(ra.ok !== rb.ok && /already running/.test((ra.ok ? rb : ra).message));
+  assert.deepStrictEqual(rpad.st.entered, ["RESTART LOGS"]);
+
+  // POST /api/rearm-logger: same method and JSON content-type (CSRF) gates as
+  // /api/setpoint; the keypad work is injected, so nothing touches a controller.
+  const { handleRearm } = require("./lib/routes");
+  const rearmReq = async (/** @type {any} */ opts, /** @type {any} */ result = null) => {
+    const res = { code: 0, body: "", headersSent: false,
+      writeHead(/** @type {number} */ c) { res.code = c; },
+      end(/** @type {string} */ s) { res.body = String(s ?? ""); } };
+    /** @type {string[]} */ const sources = [];
+    await handleRearm(spReq("{}", opts), /** @type {any} */ (res),
+      { rearmLogger: async (/** @type {any} */ o) => { sources.push(o.source); return result; } });
+    return { code: res.code, json: JSON.parse(res.body), sources };
+  };
+  assert.strictEqual((await rearmReq({ method: "GET" })).code, 405);
+  assert.strictEqual((await rearmReq({ ctype: "application/x-www-form-urlencoded" })).code, 400);
+  let rq = await rearmReq({}, { ok: true, message: "done" });
+  assert.ok(rq.code === 200 && rq.json.ok && rq.sources[0] === "the dashboard");
+  rq = await rearmReq({}, { ok: false, message: "alarm active" });
+  assert.ok(rq.code === 409 && !rq.json.ok && rq.json.message === "alarm active");
+
+  // /chiller rearm runs the same keypad walk, named as coming from Slack.
+  /** @type {string[]} */ const cmdSources = [];
+  const rearmCmd = await commandResponse("rearm", { ...cmdDeps,
+    rearmLogger: async (/** @type {any} */ o) => { cmdSources.push(o.source); return { ok: true, message: "Controller reply: done" }; } });
+  assert.ok(cmdSources[0] === "Slack" && rearmCmd.text.startsWith("*Datalogger re-armed*") && rearmCmd.text.includes("done"));
+  const rearmRefused = await commandResponse("rearm", { ...cmdDeps, rearmLogger: async () => ({ ok: false, message: "alarm active" }) });
+  assert.ok(rearmRefused.text.startsWith("*Datalogger not re-armed*") && rearmRefused.text.includes("alarm active"));
+  assert.ok((await commandResponse("help", cmdDeps)).text.includes("/chiller rearm"));
   console.log("ok");
 })().catch((e) => { console.error(e); process.exitCode = 1; });
