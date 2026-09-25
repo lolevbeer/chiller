@@ -346,7 +346,7 @@ $("chart").addEventListener("click", async (e) => {
   const btn = e.target instanceof Element && e.target.closest(".rearm");
   if (!btn) return;
   btn.disabled = true;
-  rearmNote = "Re-arming… this takes about 20 seconds.";
+  rearmNote = "Re-arming… this takes about 2 to 3 minutes."; // measured 2026-09-24: ~11 s per screen read, ~12 reads
   showRearmNote();
   try {
     const res = await fetch("/api/rearm-logger", { method: "POST",
