@@ -650,20 +650,21 @@ const cmdDeps = {
 
   // serve(): refuses cross-origin writes and dot-pair paths before routing,
   // and stamps the hardening headers on every response.
-  const fakeRes = () => ({ code: 0, headers: /** @type {Record<string, string>} */ ({}), headersSent: false,
-    setHeader(/** @type {string} */ k, /** @type {string} */ v) { this.headers[k] = v; },
-    writeHead(/** @type {number} */ c) { this.code = c; this.headersSent = true; }, end() {} });
-  const guarded = (/** @type {object} */ req) => { const r = fakeRes(); serve(/** @type {any} */ (req), /** @type {any} */ (r)); return r; };
-  const evil = guarded({ method: "POST", url: "/pgd/", headers: { host: "chiller.lan", origin: "https://evil.example" } });
+  /** @returns {Promise<{code: number, headers: Record<string, string>}>} */
+  const guarded = (/** @type {object} */ req) => new Promise((done) => {
+    const r = { code: 0, headers: {}, headersSent: false,
+      setHeader(k, v) { this.headers[k] = v; }, writeHead(c) { this.code = c; this.headersSent = true; },
+      end() { done(r); } };
+    serve(/** @type {any} */ (req), /** @type {any} */ (r));
+  });
+  const H = { host: "chiller.lan" };
+  const evil = await guarded({ method: "POST", url: "/pgd/", headers: { ...H, origin: "https://evil.example" } });
   assert.strictEqual(evil.code, 403);
   assert.strictEqual(evil.headers["X-Content-Type-Options"], "nosniff");
-  assert.strictEqual(guarded({ method: "POST", url: "/pgd/", headers: { host: "chiller.lan", origin: "null" } }).code, 403);
-  assert.strictEqual(guarded({ method: "GET", url: "/pgd/../cgi-bin/x", headers: { host: "chiller.lan" } }).code, 400);
-  assert.strictEqual(guarded({ method: "GET", url: "/pgd/%2E%2e/x", headers: { host: "chiller.lan" } }).code, 400);
+  assert.strictEqual((await guarded({ method: "POST", url: "/pgd/", headers: { ...H, origin: "null" } })).code, 403);
+  assert.strictEqual((await guarded({ method: "GET", url: "/pgd/../cgi-bin/x", headers: H })).code, 400);
+  assert.strictEqual((await guarded({ method: "GET", url: "/pgd/%2E%2e/x", headers: H })).code, 400);
   // a same-origin write gets past the guard to the route (404 here, not 403)
-  const same = fakeRes();
-  await new Promise((done) => { same.end = () => done(undefined); serve(/** @type {any} */ ({ method: "POST", url: "/nope",
-    headers: { host: "chiller.lan", origin: "https://chiller.lan" } }), /** @type {any} */ (same)); });
-  assert.strictEqual(same.code, 404);
+  assert.strictEqual((await guarded({ method: "POST", url: "/nope", headers: { ...H, origin: "https://chiller.lan" } })).code, 404);
   console.log("ok");
 })().catch((e) => { console.error(e); process.exitCode = 1; });

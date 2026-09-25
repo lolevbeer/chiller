@@ -21,6 +21,7 @@
 //         SETPOINT_WREG=1 node probe_setpoint.js --write --yes-i-am-sure
 const ModbusRTU = /** @type {typeof import("modbus-serial").default} */ (/** @type {unknown} */ (require("modbus-serial")));
 const { HOST } = require("./lib/config");
+const { connect } = require("./lib/modbus");
 
 const WREG = Number(process.env.SETPOINT_WREG || 1);
 // Registers 0..80 in one FC3/FC4 pair: covers holding 1 (the active cooling
@@ -67,15 +68,8 @@ function printTable({ input, holding }) {
 
 (async () => {
   const c = new ModbusRTU();
-  c.setTimeout(3000);
   try {
-    // Same connect pattern as lib/modbus.js: race connectTCP against a 5 s
-    // timer so an unreachable chiller fails fast, not at the OS's ~75 s.
-    const conn = c.connectTCP(HOST, { port: 502 });
-    conn.catch(() => {}); // surfaced via the race below
-    await Promise.race([conn,
-      new Promise((_, rej) => setTimeout(rej, 5000, new Error("connect timeout")).unref())]);
-    c.setID(1);
+    await connect(c); // lib/modbus.js: fails in 5 s on an unreachable chiller, not the OS's ~75 s
 
     // Step 1 — read-only compare.
     const before = await snapshot(c);

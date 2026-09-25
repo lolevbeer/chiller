@@ -334,6 +334,7 @@ const RESTART_STEPS = "On the controller display (pGD): hold Alarm + Enter ~3 s 
   "system menu → LOGGER → RESTART LOGS. Logging re-arms even if it says “no logs to restart.”";
 
 let histChart, histHours = 6;
+const CHART_H = 260; // CSS px; also used by the resize handler
 function drawHist(data) {
   const el = $("chart");
   if (histChart) { histChart.destroy(); histChart = null; }
@@ -395,7 +396,7 @@ function drawHist(data) {
     value: (u, x) => (x == null ? "off" : "on") });
   const IN = v("--hist-in"), OUT = v("--accent");
   histChart = new uPlot({
-    width: el.clientWidth, height: 260,
+    width: el.clientWidth, height: CHART_H,
     // one hover dot on the hovered series, sized to be findable on a wall display
     cursor: { points: { size: 7 }, y: false },
     series: [
@@ -453,7 +454,7 @@ $("ranges").onclick = async e => {
   histLoading();
   drawHist(await loadHist(histHours));
 };
-addEventListener("resize", () => histChart && histChart.setSize({ width: $("chart").clientWidth, height: 260 }));
+addEventListener("resize", () => histChart && histChart.setSize({ width: $("chart").clientWidth, height: CHART_H }));
 histLoading();
 (async function histLoop() {
   // fast ticks while the server backfills (chart grows chunk by chunk), then 60 s

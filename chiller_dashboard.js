@@ -29,15 +29,7 @@ process.on("unhandledRejection", (e) => console.error("unhandled rejection:", e)
 
 const PORT = Number(process.env.PORT || 8000);
 
-// Guards in front of lib/routes.js's handle(). The app has no login (trusted
-// LAN / Cloudflare Access), so these close the holes that don't need one:
-//  - Cross-site writes: a foreign page can make the viewer's browser POST here.
-//    /api/setpoint's JSON-only check stops forms, but /pgd/ forwards keypresses
-//    as plain form POSTs. Browsers send Origin on every POST, so any write
-//    whose Origin isn't this host is refused.
-//  - "..": /pgd/ forwards req.url verbatim, and the controller may resolve
-//    /pgd/../ into its CGI tree. No real URL here contains a dot pair.
-//  - A handler that throws answers 500 instead of leaving the socket hanging.
+// Guards in front of lib/routes.js's handle() — see "HTTP interface" in README.
 /** @param {import("http").IncomingMessage} req @param {import("http").ServerResponse} res */
 function serve(req, res) {
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -49,7 +41,8 @@ function serve(req, res) {
   const origin = req.headers.origin, host = req.headers.host;
   if (req.method !== "GET" && req.method !== "HEAD" && origin &&
       origin !== `http://${host}` && origin !== `https://${host}`)
-    return reject(403, "cross-origin request refused");
+    return reject(403, "cross-origin request refused"); // /pgd/ takes plain form POSTs
+  // TODO: move into proxyPgd as a pathname check once the routes-table refactor lands
   if (/(\.|%2e){2}/i.test(req.url || "")) return reject(400, "bad path");
   handle(req, res).catch((/** @type {unknown} */ e) => {
     console.error("request failed:", req.method, req.url, e);
