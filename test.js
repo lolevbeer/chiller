@@ -6,6 +6,7 @@ const { post, flushPosts, initialDailyKey } = require("./lib/slack");
 const { decide, reviveState, validBoostThresholds, IDLE: BOOST_IDLE, TRIP_F, BOOST_MARGIN_F, BOOST_URGENT_F } = require("./lib/boost");
 const { writeSetpoint, verifySetpoint } = require("./lib/modbus");
 const { commandResponse, trendFromCsv, alarmsText } = require("./lib/slack_commands");
+const { rearmLogger } = require("./lib/pgd");
 const dateTime = require("./lib/datetime");
 
 // The requires above pulled in lib/config.js, which loads the REAL .env —
@@ -660,5 +661,108 @@ const cmdDeps = {
     assert.ok(!/\p{Extended_Pictographic}/u.test(text), text);
     assert.ok(!/\d{4}-\d{2}-\d{2}T/.test(text), text);
   }
+
+  // Datalogger re-arm drives the live keypad, so it is tested against a fake
+  // pGD modelled on the menus recorded on 2026-09-24. The property that matters
+  // most: Enter is only ever pressed on exactly "RESTART LOGS" (WIPE LOGS sits
+  // two rows below it), and the keypad always ends on the main screen.
+  const SYS_MENU = ["INFORMATION", "SETTINGS", "APPLICATION", "UPGRADE", "LOGGER", "DIAGNOSTICS"];
+  const LOG_MENU = ["EXPORT LOGS", "RESTART LOGS", "FLUSH LOGS", "WIPE LOGS"];
+  const fakePad = ({ at = "home", sys = SYS_MENU, downBy = 1 } = {}) => {
+    const st = { at, idx: 0, entered: /** @type {string[]} */ ([]), keys: /** @type {number[]} */ ([]) };
+    const menu = () => (st.at === "sys" ? sys : LOG_MENU);
+    const pad8 = (/** @type {string[]} */ r) => [...r, ...Array(8).fill("")].slice(0, 8);
+    return { st,
+      async screen() {
+        if (st.at === "home") return pad8(["09/24/26 21:28       M", "Set:  27.0°F PmpA 13.6", "", "", "", "", "", "Stand by"]);
+        if (st.at === "result") return pad8(["No logs to restart"]);
+        return pad8(menu().map((t, i) => (i === st.idx ? "> " : "  ") + t));
+      },
+      async key(/** @type {number} */ code) {
+        st.keys.push(code);
+        if (code === 0) { st.at = { home: "home", sys: "home", logger: "sys", result: "logger" }[st.at]; st.idx = 0; }
+        else if (code === 130 && st.at === "home") { st.at = "sys"; st.idx = 0; }
+        else if (code === 15 && (st.at === "sys" || st.at === "logger")) st.idx = Math.min(st.idx + downBy, menu().length - 1);
+        else if (code === 13 && st.at === "sys" && sys[st.idx] === "LOGGER") { st.at = "logger"; st.idx = 0; }
+        else if (code === 13 && (st.at === "sys" || st.at === "logger")) {
+          st.entered.push(menu()[st.idx]);
+          if (menu()[st.idx] === "RESTART LOGS") st.at = "result";
+        }
+      },
+    };
+  };
+  /** @type {string[]} */ const rearmAudit = [];
+  const rearmDeps = (/** @type {any} */ pad, extra = {}) => ({ pad, source: "the test suite",
+    readAlarms: async () => ({ active: [], recent: [] }),
+    post: async (/** @type {any} */ b) => { rearmAudit.push(b.text); return true; }, ...extra });
+
+  let rpad = fakePad();
+  let rr = await rearmLogger(rearmDeps(rpad));
+  assert.ok(rr.ok, rr.message);
+  assert.deepStrictEqual(rpad.st.entered, ["RESTART LOGS"]);
+  assert.strictEqual(rpad.st.at, "home");
+  assert.ok(rearmAudit.at(-1).startsWith("*Notice: Datalogger re-armed from the test suite*"));
+  // Keypad left deep in a menu: it backs out to the main screen first.
+  rpad = fakePad({ at: "logger" });
+  rr = await rearmLogger(rearmDeps(rpad));
+  assert.ok(rr.ok, rr.message);
+  assert.deepStrictEqual(rpad.st.entered, ["RESTART LOGS"]);
+  assert.strictEqual(rpad.st.at, "home");
+  // A menu without LOGGER (different firmware): no Enter pressed, back home, reported.
+  rpad = fakePad({ sys: SYS_MENU.filter((x) => x !== "LOGGER") });
+  rr = await rearmLogger(rearmDeps(rpad));
+  assert.ok(!rr.ok);
+  assert.deepStrictEqual(rpad.st.entered, []);
+  assert.strictEqual(rpad.st.at, "home");
+  assert.ok(rearmAudit.at(-1).startsWith("*Warning: Datalogger re-arm from the test suite failed*"));
+  // Selection jumps two rows per Down (someone else on the keypad): it skips
+  // past RESTART LOGS to WIPE LOGS and must NOT press Enter on anything.
+  rpad = fakePad({ downBy: 2 });
+  rr = await rearmLogger(rearmDeps(rpad));
+  assert.ok(!rr.ok);
+  assert.deepStrictEqual(rpad.st.entered, []);
+  assert.strictEqual(rpad.st.at, "home");
+  // A standing alarm would stop the log again, and an unknown alarm state is
+  // not a clean one: both refuse before a single key is sent.
+  rpad = fakePad();
+  rr = await rearmLogger(rearmDeps(rpad, { readAlarms: async () => ({ active: [{ name: "High glycol temp", since: "x" }], recent: [] }) }));
+  assert.ok(!rr.ok && /High glycol temp/.test(rr.message));
+  assert.deepStrictEqual(rpad.st.keys, []);
+  rr = await rearmLogger(rearmDeps(rpad, { readAlarms: async () => null }));
+  assert.ok(!rr.ok);
+  assert.deepStrictEqual(rpad.st.keys, []);
+  // One run at a time: the button and /chiller rearm share one keypad.
+  rpad = fakePad();
+  const [ra, rb] = await Promise.all([rearmLogger(rearmDeps(rpad)), rearmLogger(rearmDeps(rpad))]);
+  assert.ok(ra.ok !== rb.ok && /already running/.test((ra.ok ? rb : ra).message));
+  assert.deepStrictEqual(rpad.st.entered, ["RESTART LOGS"]);
+
+  // POST /api/rearm-logger: same method and JSON content-type (CSRF) gates as
+  // /api/setpoint; the keypad work is injected, so nothing touches a controller.
+  const { handleRearm } = require("./lib/routes");
+  const rearmReq = async (/** @type {any} */ opts, /** @type {any} */ result = null) => {
+    const res = { code: 0, body: "", headersSent: false,
+      writeHead(/** @type {number} */ c) { res.code = c; },
+      end(/** @type {string} */ s) { res.body = String(s ?? ""); } };
+    /** @type {string[]} */ const sources = [];
+    await handleRearm(spReq("{}", opts), /** @type {any} */ (res),
+      { rearmLogger: async (/** @type {any} */ o) => { sources.push(o.source); return result; } });
+    return { code: res.code, json: JSON.parse(res.body), sources };
+  };
+  assert.strictEqual((await rearmReq({ method: "GET" })).code, 405);
+  assert.strictEqual((await rearmReq({ ctype: "application/x-www-form-urlencoded" })).code, 400);
+  let rq = await rearmReq({}, { ok: true, message: "done" });
+  assert.ok(rq.code === 200 && rq.json.ok && rq.sources[0] === "the dashboard");
+  rq = await rearmReq({}, { ok: false, message: "alarm active" });
+  assert.ok(rq.code === 409 && !rq.json.ok && rq.json.message === "alarm active");
+
+  // /chiller rearm runs the same keypad walk, named as coming from Slack.
+  /** @type {string[]} */ const cmdSources = [];
+  const rearmCmd = await commandResponse("rearm", { ...cmdDeps,
+    rearmLogger: async (/** @type {any} */ o) => { cmdSources.push(o.source); return { ok: true, message: "Controller reply: done" }; } });
+  assert.ok(cmdSources[0] === "Slack" && rearmCmd.text.startsWith("*Datalogger re-armed*") && rearmCmd.text.includes("done"));
+  const rearmRefused = await commandResponse("rearm", { ...cmdDeps, rearmLogger: async () => ({ ok: false, message: "alarm active" }) });
+  assert.ok(rearmRefused.text.startsWith("*Datalogger not re-armed*") && rearmRefused.text.includes("alarm active"));
+  assert.ok((await commandResponse("help", cmdDeps)).text.includes("/chiller rearm"));
   console.log("ok");
 })().catch((e) => { console.error(e); process.exitCode = 1; });

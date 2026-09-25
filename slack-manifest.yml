@@ -2,7 +2,7 @@ _metadata:
   major_version: 1
 display_information:
   name: Chiller
-  description: Read-only chiller status and history
+  description: Chiller status and history, plus datalogger re-arm
   background_color: "#111827"
 features:
   bot_user:
@@ -10,8 +10,8 @@ features:
     always_online: false
   slash_commands:
     - command: /chiller
-      description: Read current chiller status, alarms, trends, and runtimes
-      usage_hint: status | alarms | trend 6h | circuit a | runtimes | why
+      description: Chiller status, alarms, trends, and runtimes; re-arm the datalogger
+      usage_hint: status | alarms | trend 6h | circuit a | runtimes | why | rearm
       should_escape: false
 oauth_config:
   scopes:

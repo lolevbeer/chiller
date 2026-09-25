@@ -21,7 +21,9 @@ when `SETPOINT_WRITE=1` is set: the [automatic setpoint
 boost](#automatic-setpoint-boost) writes the cooling setpoint to dodge the
 controller's hardcoded high-glycol shutdown, and the dashboard's manual
 setpoint control (`POST /api/setpoint`) writes it on operator request. Every
-other register access is a read. The
+other register access is a read. Separately, the datalogger re-arm (dashboard
+button or `/chiller rearm`) presses keys on the controller's virtual keypad;
+see [Datalogger re-arm](#datalogger-re-arm). The
 application has no built-in authentication; put an access-control layer such as
 Cloudflare Access in front of it before exposing it beyond a trusted network.
 
@@ -234,6 +236,7 @@ do not paste the webhook URL into a command line.
 | `/chiller circuit a` | Suction/discharge, evaporating/condensing, superheat, EEV, fan, and load for circuit A or B |
 | `/chiller runtimes` | Pump, compressor, and condenser-fan hours |
 | `/chiller why` | Abnormal facts visible in the current snapshot; not a root-cause diagnosis |
+| `/chiller rearm` | Restart the datalogger after an alarm stopped it; presses keys on the controller (see [Datalogger re-arm](#datalogger-re-arm)) |
 | `/chiller help` | Command reference; any unrecognized command also shows help |
 
 Replies are private to the requester by default. Add `share` anywhere in the
@@ -422,6 +425,7 @@ unauthenticated and are intended for trusted or access-controlled networks.
 | `/api/web` | JSON map of 16 filtered `getvar.csv` points in engineering units |
 | `/api/all` | Combined `{"regs": ..., "web": ..., "boost": ..., "writesEnabled": ...}` payload used by the five-second refresh loop; `boost` is the setpoint-boost status snapshot and `writesEnabled` tells the page whether the setpoint control renders |
 | `POST /api/setpoint` | Manual setpoint write; see [Manual setpoint endpoint](#manual-setpoint-endpoint) |
+| `POST /api/rearm-logger` | Datalogger re-arm (JSON content type required); 200 on success, 409 when refused or backed out; see [Datalogger re-arm](#datalogger-re-arm) |
 | `/api/alarms` | `{"active": [{name, since}], "recent": [{name, at, cleared}]}` |
 | `/api/log?start=…&stop=…` | Cached CSV slice; timestamps must be `YYYY-MM-DDThh:mm:ss` |
 | `/pgd/*` | Narrow reverse proxy to the controller's live HTML5 pGD interface |
@@ -559,10 +563,34 @@ clock was about 25 minutes fast on 2026-07-11, so the cache queries with a
 one-hour future pad.
 
 The log stopped after a 2026-04-15 service visit and was re-armed on 2026-07-11.
-If charts go flat, open the physical pGD or `/pgd/index.htm`, hold Alarm+Enter
-for three seconds, enter **LOGGER**, and re-arm the log. **RESTART LOGS** may say
-that no logs need restarting even when this is required. The controller's own
-chart is at `http://<controller>/logger.htm`.
+It halts on every alarm and never restarts itself. Slack posts a *Datalogger
+stopped* warning once it has been silent for `SLACK_LOG_STALE_MIN` minutes with
+no alarm standing. The controller's own chart is at
+`http://<controller>/logger.htm`.
+
+#### Datalogger re-arm
+
+The dashboard's **Re-arm logger** button (in the "Datalogger stopped" banner)
+and `/chiller rearm` both run `lib/pgd.js`, which presses keys on the
+controller's virtual keypad the same way a person would:
+
+1. Refuse, without pressing anything, if an alarm stands (the log would stop
+   again) or the alarm state can't be read. One run at a time.
+2. Tap Esc until the main screen shows.
+3. Hold Alarm+Enter to open the system menu, tap Down until the selected row
+   reads `LOGGER`, and press Enter.
+4. Tap Down until the selected row reads `RESTART LOGS`, re-read the screen,
+   and press Enter only if it still reads exactly that. **WIPE LOGS** sits two
+   rows below and must never be pressed.
+5. Tap Esc back to the main screen and post the outcome to Slack.
+
+Every step reads the screen text first; an unexpected screen means backing out
+with Esc and reporting, never pressing on. The controller replies "No logs to
+restart" even when it does restart the log; the *Datalogger stopped* alert
+resolving is the real confirmation.
+
+To do it by hand: on the physical pGD or `/pgd/index.htm`, hold Alarm+Enter for
+three seconds, enter **LOGGER**, and choose **RESTART LOGS**.
 
 ## Hardware reference
 
@@ -780,11 +808,15 @@ dashboard access.
   time ranges, and durations.
 - `lib/slack.js` evaluates proactive alerts, queues webhook posts, and builds the
   daily summary.
-- `lib/slack_commands.js` implements read-only `/chiller` Socket Mode commands.
+- `lib/slack_commands.js` implements the `/chiller` Socket Mode commands; all
+  are read-only except `rearm`.
+- `lib/pgd.js` drives the virtual keypad to re-arm the datalogger.
 - `lib/routes.js` serves APIs, static assets, development reloads, the pGD
-  proxy, and the `SETPOINT_WRITE`-gated manual setpoint endpoint.
+  proxy, the `SETPOINT_WRITE`-gated manual setpoint endpoint, and the
+  datalogger re-arm endpoint.
 - `dashboard.html` is the page markup and CSS. `public/app.js` handles live data,
-  alarms, history, and the click-to-edit setpoint control;
+  alarms, history, the click-to-edit setpoint control, and the Re-arm logger
+  button;
   `public/unit3d.js` renders the model.
 - `slack-manifest.yml` is the reproducible Slack app definition.
 - `gd_seal.svg` is vendor artwork served as `/logo.svg` and used on the model.
