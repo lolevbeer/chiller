@@ -105,7 +105,9 @@ assert.strictEqual(p1.length, 1);
 assert.ok(p1[0].includes("High glycol temp") && p1[0].includes("Jul 12, 2026 at 9:00 AM"));
 assert.ok(!p1[0].includes("2026-07-12T"));
 assert.deepStrictEqual(p2, []); // still standing — no repeat. This is the deduplication.
-assert.ok(p3[0].includes("High glycol temp recovered") && p3[0].includes("lasted 2 min"));
+assert.ok(p3[0].includes("Resolved: High glycol temp") && p3[0].includes("lasted 2 min"));
+// Alerts are plain text: a severity label, no emoji.
+assert.ok(p1[0].startsWith("*Critical: High glycol temp*") && !/\p{Extended_Pictographic}/u.test(p1[0] + p3[0]));
 
 // A failed alarm read is not a recovery: the fault is held until a read says it cleared
 assert.deepStrictEqual(seq(alarmed, { ...OK, alarms: null })[1], []);
@@ -119,10 +121,10 @@ assert.deepStrictEqual(seq({ ...OK, web: { ...WEB_OK, "LEL A %": 9 } })[0], []);
 // the trip point) — a leak hovering on the threshold must not flap.
 const leak = (pct) => ({ ...OK, web: { ...WEB_OK, "LEL A %": pct } });
 assert.deepStrictEqual(seq(leak(12), leak(8))[1], []);
-assert.ok(seq(leak(12), leak(8), leak(3))[2][0].includes("recovered"));
+assert.ok(seq(leak(12), leak(8), leak(3))[2][0].includes("Resolved:"));
 // A whole getvar.csv failure is unknown, not proof that a safety cleared.
 assert.deepStrictEqual(seq(leak(12), { ...OK, web: null })[1], []);
-assert.ok(seq(leak(12), { ...OK, web: null }, leak(3))[2][0].includes("recovered"));
+assert.ok(seq(leak(12), { ...OK, web: null }, leak(3))[2][0].includes("Resolved:"));
 
 // A leak sensor that drops out of the getvar response is itself a fault (2-poll dwell)
 const { "LEL B %": _b, ...blind } = WEB_OK;
@@ -146,7 +148,7 @@ assert.deepStrictEqual(seq(...rep(5, hot), OK, ...rep(5, hot)).flat(), []);
 const warm = (t) => ({ ...OK, regs: { ...REGS_OK, 68: t } });
 assert.deepStrictEqual(seq(...rep(6, hot), warm(330))[6], []); // 33°F: inside the band, not clear of it
 const recov = seq(...rep(6, hot), warm(310))[6]; // 31°F: clear
-assert.ok(recov[0].includes("High glycol supply temperature recovered") && recov[0].includes("lasted 6 min"));
+assert.ok(recov[0].includes("Resolved: High glycol supply temperature") && recov[0].includes("lasted 6 min"));
 // A register timeout likewise cannot clear an active temperature condition.
 assert.deepStrictEqual(seq(...rep(6, hot), { ...OK, regs: null })[6], []);
 
@@ -169,8 +171,8 @@ assert.deepStrictEqual(seq(...rep(6, nearTrip(480))).flat().filter((p) => p.incl
 assert.deepStrictEqual(seq(...rep(6, { ...OK, regs: { ...REGS_OK, 68: 322, 70: 192 } }))
   .flat().filter((p) => p.includes(TRIP_TITLE)), []);
 // Recovers with hysteresis once the margin is a full HYST_F back under the threshold.
-assert.deepStrictEqual(seq(...rep(6, nearTrip(490)), nearTrip(465)).at(-1).filter((p) => p.includes(`${TRIP_TITLE} recovered`)), []); // margin 11.5°F: still within hysteresis
-assert.ok(seq(...rep(6, nearTrip(490)), nearTrip(455)).at(-1).find((p) => p.includes(`${TRIP_TITLE} recovered`))); // margin 10.5°F: clear
+assert.deepStrictEqual(seq(...rep(6, nearTrip(490)), nearTrip(465)).at(-1).filter((p) => p.includes(`Resolved: ${TRIP_TITLE}`)), []); // margin 11.5°F: still within hysteresis
+assert.ok(seq(...rep(6, nearTrip(490)), nearTrip(455)).at(-1).find((p) => p.includes(`Resolved: ${TRIP_TITLE}`))); // margin 10.5°F: clear
 // Urgent nudge tier: past BOOST_URGENT_F (15°F over) the loop can reach the
 // trip before the 5-minute dwell elapses, so the escalated nudge fires on the
 // FIRST sample — with writes disabled it's the only mitigation, and a nudge
@@ -373,7 +375,7 @@ assert.ok(!seq(...falling).flat().join("\n").includes("not cooling"));
 const down = { regs: null, web: null, alarms: null };
 assert.deepStrictEqual(seq(down)[0], []);
 assert.ok(seq(down, down)[1][0].includes("Chiller unreachable"));
-assert.ok(seq(down, down, OK)[2][0].includes("Chiller unreachable recovered"));
+assert.ok(seq(down, down, OK)[2][0].includes("Resolved: Chiller unreachable"));
 
 // log cache: chunks merge deduped on timestamp, stay sorted; slice = header + window.
 // Timestamps built relative to now — logInsert trims rows older than its 7 d window.
@@ -575,7 +577,7 @@ const cmdDeps = {
     { ...auditDeps, writeSetpoint: async () => ({ ok: false, readback: 29, wrote: true }) });
   assert.strictEqual(sp.code, 502);
   assert.strictEqual(audited.length, 2);
-  assert.ok(/Ambiguous/.test(audited[1].text) && /29\.0°F/.test(audited[1].text));
+  assert.ok(/Unverified/.test(audited[1].text) && /29\.0°F/.test(audited[1].text));
   // A hard-bound refusal (wrote:false, nothing on the wire) does not audit.
   sp = await setp('{"setpointF": 80}', {}, { writeSetpoint, post: auditDeps.post });
   assert.ok(sp.code === 400 && audited.length === 2);
@@ -596,6 +598,13 @@ const cmdDeps = {
 
   // fetch resolves for HTTP failures, so post() must inspect `ok` explicitly.
   assert.strictEqual(await post({}, async () => new Response("no", { status: 503 }), () => {}), false);
+  // Labelled messages go out as a colored attachment; others pass through untouched.
+  /** @type {any[]} */ const sent = [];
+  const capture = async (/** @type {any} */ _u, /** @type {any} */ o) => { sent.push(JSON.parse(o.body)); return new Response("ok"); };
+  await post({ text: "*Critical: Propane detected*\nx" }, capture);
+  await post({ text: "plain" }, capture);
+  assert.deepStrictEqual(sent[0], { attachments: [{ color: "#d00000", text: "*Critical: Propane detected*\nx", fallback: "*Critical: Propane detected*\nx" }] });
+  assert.deepStrictEqual(sent[1], { text: "plain" });
 
   // A failed edge stays at the head of the outbox. Once Slack recovers, both it
   // and the later edge are delivered in order instead of being consumed.

@@ -250,6 +250,10 @@ kept in an ordered in-memory queue and retried on the next poll; later events do
 not leapfrog them. A failed source read is treated as unknown, never as proof
 that an incident recovered.
 
+Each message starts with a bold severity label, which sets the color of its
+side bar: Critical (red), Warning (amber), Resolved (green), or Notice (blue,
+for setpoint changes). Messages contain no emoji.
+
 | Condition | Default threshold | Persistence before alert |
 |---|---:|---:|
 | Controller alarm | Any standing named fault | Immediate |
