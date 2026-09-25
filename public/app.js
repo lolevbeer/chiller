@@ -99,11 +99,11 @@ function safety(w, regs) {
     ? `<div class="s" title="${tip}"><span class="dot bad"></span><b>${name} tripped</b></div>` : "";
 
   const active = (alarms?.active ?? []).map((a) =>
-    `<div class="alarm"><span>${esc(a.name)}</span><span class="when">since ${when(a.since)}</span></div>`).join("");
+    `<div class="alarm"><span>${esc(a.name)}</span><span class="when">since ${stamp(a.since)}</span></div>`).join("");
   // no active alarm → show the last one instead: this unit trips high-glycol-temp
   // often enough that "nothing right now" alone would hide a real pattern
   const last = !active && alarms?.recent?.length
-    ? `<div class="last">Last fault<br><b>${esc(alarms.recent[0].name)}</b> · ${when(alarms.recent[0].at)}</div>` : "";
+    ? `<div class="last">Last fault<br><b>${esc(alarms.recent[0].name)}</b> · ${stamp(alarms.recent[0].at)}</div>` : "";
 
   // runtime hours, paired A/B per device — wear on each half of the machine, and
   // the gap between a pair is the interesting bit (lead/lag imbalance)
@@ -201,7 +201,6 @@ $("setpWrite").onclick = async () => {
 // Human-facing dates come from the same formatter used by Slack. It preserves
 // the controller's site-local clock fields despite their misleading +00:00.
 const stamp = (ts) => esc(ChillerDateTime.moment(ts));
-const when = stamp;
 // How long the fault stood — the useful part: a 6.9 h high-temp is a different
 // story from a 2 min one, and the log's Start/Stop pair is the only place it shows.
 // A Start with no Stop does NOT mean "still active": the controller's log holds
@@ -362,6 +361,7 @@ $("chart").addEventListener("click", async (e) => {
 });
 
 let histChart, histHours = 6;
+const CHART_H = 260; // CSS px; also used by the resize handler
 function drawHist(data) {
   const el = $("chart");
   if (histChart) { histChart.destroy(); histChart = null; }
@@ -425,7 +425,7 @@ function drawHist(data) {
     value: (u, x) => (x == null ? "off" : "on") });
   const IN = v("--hist-in"), OUT = v("--accent");
   histChart = new uPlot({
-    width: el.clientWidth, height: 260,
+    width: el.clientWidth, height: CHART_H,
     // one hover dot on the hovered series, sized to be findable on a wall display
     cursor: { points: { size: 7 }, y: false },
     series: [
@@ -483,7 +483,7 @@ $("ranges").onclick = async e => {
   histLoading();
   drawHist(await loadHist(histHours));
 };
-addEventListener("resize", () => histChart && histChart.setSize({ width: $("chart").clientWidth, height: 220 }));
+addEventListener("resize", () => histChart && histChart.setSize({ width: $("chart").clientWidth, height: CHART_H }));
 histLoading();
 (async function histLoop() {
   // fast ticks while the server backfills (chart grows chunk by chunk), then 60 s

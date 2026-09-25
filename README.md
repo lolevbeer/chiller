@@ -417,6 +417,12 @@ service.
 
 The application uses `node:http` with no web framework. API responses are
 unauthenticated and are intended for trusted or access-controlled networks.
+Every request passes a small guard first (`serve()` in `chiller_dashboard.js`):
+a non-GET request whose `Origin` is not this host gets 403 (so a foreign web
+page cannot press pGD keys or write the setpoint through a viewer's browser),
+a URL containing `..` gets 400 (so `/pgd/` cannot reach past the controller's
+pGD tree), and every response carries `X-Content-Type-Options: nosniff` and
+`X-Frame-Options: SAMEORIGIN`.
 
 | Route | Response |
 |---|---|
@@ -729,8 +735,7 @@ Run the one-off Python tool from a virtual environment containing `pymodbus`:
 `ROUNDS`, `INTERVAL`, and `CHILLER_IP` are configurable through the environment.
 Fast fan and EEV signals were missed because the two requests are about two
 seconds apart. A later time-series comparison through `/api/all` found fan output
-at 33/64 and EEV position at 26/58. `find_registers.py` is the superseded
-single-snapshot approach and remains only as historical reference.
+at 33/64 and EEV position at 26/58.
 
 ## Network access and recovery
 
@@ -827,7 +832,6 @@ dashboard access.
 - `jsconfig.json` configures JSDoc type checking; there is no build step.
 - `probe_setpoint.js` is the operator-only probe that confirms the writable
   setpoint holding register before `SETPOINT_WRITE=1` is ever enabled.
-- `correlate_registers.py` is the current discovery tool;
-  `find_registers.py` is its superseded predecessor.
+- `correlate_registers.py` is the register discovery tool.
 - `teleport_split.sh` repairs the Teleport routing table after each connection.
 - `CLAUDE.md` contains repository-specific assistant instructions.

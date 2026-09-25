@@ -1,7 +1,7 @@
 // Offline self-check for scale/sign logic, getvar.csv row parsing, and page wiring
 // (no device needed).  Run: node test.js
 const assert = require("node:assert");
-const { scale, ROW, WEB_VARS, UNUSED_WEB_VARS, PAGE, TSTAMP, step, logInsert, logSlice } = require("./chiller_dashboard.js");
+const { serve, scale, ROW, WEB_VARS, UNUSED_WEB_VARS, PAGE, TSTAMP, step, logInsert, logSlice } = require("./chiller_dashboard.js");
 const { post, flushPosts, initialDailyKey } = require("./lib/slack");
 const { decide, reviveState, validBoostThresholds, IDLE: BOOST_IDLE, TRIP_F, BOOST_MARGIN_F, BOOST_URGENT_F } = require("./lib/boost");
 const { writeSetpoint, verifySetpoint } = require("./lib/modbus");
@@ -661,6 +661,38 @@ const cmdDeps = {
     assert.ok(!/\p{Extended_Pictographic}/u.test(text), text);
     assert.ok(!/\d{4}-\d{2}-\d{2}T/.test(text), text);
   }
+
+  // step(): a cleared controller alarm drops its dwell counter, so a re-fire
+  // hours later is a fresh incident, not a continuation of the old one.
+  {
+    const X = [{ name: "High glycol temp", since: "2026-07-13T01:00:00+00:00" }];
+    const at = (/** @type {number} */ t, /** @type {any[]} */ active) => ({ t, regs: REGS_OK, web: WEB_OK, alarms: { active } });
+    let c = { active: new Map(), counts: new Map(), hist: [] };
+    c = step(c, at(0, X));
+    c = step(c, at(60e3, []));
+    c = step(c, at(3 * 3600e3, X));
+    const refire = c.posts.find((p) => p.includes("High glycol temp"));
+    assert.ok(refire && refire.includes("Active for 0 sec"), refire);
+  }
+
+  // serve(): refuses cross-origin writes and dot-pair paths before routing,
+  // and stamps the hardening headers on every response.
+  /** @returns {Promise<{code: number, headers: Record<string, string>}>} */
+  const guarded = (/** @type {object} */ req) => new Promise((done) => {
+    const r = { code: 0, headers: {}, headersSent: false,
+      setHeader(k, v) { this.headers[k] = v; }, writeHead(c) { this.code = c; this.headersSent = true; },
+      end() { done(r); } };
+    serve(/** @type {any} */ (req), /** @type {any} */ (r));
+  });
+  const H = { host: "chiller.lan" };
+  const evil = await guarded({ method: "POST", url: "/pgd/", headers: { ...H, origin: "https://evil.example" } });
+  assert.strictEqual(evil.code, 403);
+  assert.strictEqual(evil.headers["X-Content-Type-Options"], "nosniff");
+  assert.strictEqual((await guarded({ method: "POST", url: "/pgd/", headers: { ...H, origin: "null" } })).code, 403);
+  assert.strictEqual((await guarded({ method: "GET", url: "/pgd/../cgi-bin/x", headers: H })).code, 400);
+  assert.strictEqual((await guarded({ method: "GET", url: "/pgd/%2E%2e/x", headers: H })).code, 400);
+  // a same-origin write gets past the guard to the route (404 here, not 403)
+  assert.strictEqual((await guarded({ method: "POST", url: "/nope", headers: { ...H, origin: "https://chiller.lan" } })).code, 404);
 
   // Datalogger re-arm drives the live keypad, so it is tested against a fake
   // pGD modelled on the menus recorded on 2026-09-24. The property that matters
