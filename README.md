@@ -268,6 +268,7 @@ for setpoint changes). Messages contain no emoji.
 | No flow | Pump running while its flow switch reports no flow | 2 min |
 | Not cooling | Compressor running off setpoint without a falling outlet trend | `SLACK_NOTCOOL_MIN=20` min |
 | Runtime imbalance | Compressor-hour difference over `SLACK_IMBALANCE_H=100` h | Immediate |
+| Datalogger stopped | No new log row for `SLACK_LOG_STALE_MIN=15` min while the controller is online with no standing alarm (the log halts on any alarm and never re-arms itself); clears only once fresh rows arrive | 2 polls |
 | Controller offline | Modbus read fails | 2 polls |
 
 Temperature alerts clear only after moving `SLACK_HYST_F=2` °F back inside the

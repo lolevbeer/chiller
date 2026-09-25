@@ -377,6 +377,23 @@ assert.deepStrictEqual(seq(down)[0], []);
 assert.ok(seq(down, down)[1][0].includes("Chiller unreachable"));
 assert.ok(seq(down, down, OK)[2][0].includes("Resolved: Chiller unreachable"));
 
+// Datalogger stopped: the newest log row is over 15 min old (seq's t starts at 0).
+const logStale = { ...OK, logNewest: -20 * 60000 };
+const logFresh = { ...OK, logNewest: 60 * 60000 }; // clock runs fast: a live tail sits ahead of now
+const logPosts = seq(logStale, logStale);
+assert.deepStrictEqual(logPosts[0], []); // two polls, like offline
+assert.ok(logPosts[1][0].startsWith("*Warning: Datalogger stopped*") && logPosts[1][0].includes("RESTART LOGS"));
+assert.deepStrictEqual(seq(logFresh, logFresh).flat(), []);
+// A standing alarm stops the log by design; the alarm alert already covers it,
+// and re-arming would only stop again. The logger alert waits for the clear.
+const logAlarmed = { ...logStale, alarms: { active: [{ name: "High glycol temp", since: "2026-07-12T09:00:00" }] } };
+assert.ok(!seq(logAlarmed, logAlarmed).flat().some((p) => p.includes("Datalogger")));
+// Unknown is not healthy: a cache still backfilling (logNewest null) or an
+// offline controller must neither raise nor resolve it.
+assert.ok(!seq(logStale, logStale, { ...OK, logNewest: null }, { ...logStale, regs: null })
+  .flat().some((p) => p.includes("Resolved: Datalogger")));
+assert.ok(seq(logStale, logStale, logFresh)[2].some((p) => p.includes("Resolved: Datalogger stopped")));
+
 // log cache: chunks merge deduped on timestamp, stay sorted; slice = header + window.
 // Timestamps built relative to now — logInsert trims rows older than its 7 d window.
 const pad = (n) => String(n).padStart(2, "0");
