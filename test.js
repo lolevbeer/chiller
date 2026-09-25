@@ -731,6 +731,15 @@ const cmdDeps = {
   rr = await rearmLogger(rearmDeps(rpad, { readAlarms: async () => null }));
   assert.ok(!rr.ok);
   assert.deepStrictEqual(rpad.st.keys, []);
+  // An alarm that trips mid-walk (it takes minutes) is caught by a second
+  // check right before the RESTART LOGS press: nothing is pressed, back home.
+  rpad = fakePad();
+  let alarmReads = 0;
+  rr = await rearmLogger(rearmDeps(rpad, { readAlarms: async () =>
+    (++alarmReads === 1 ? { active: [], recent: [] } : { active: [{ name: "Compressor A overload", since: "x" }], recent: [] }) }));
+  assert.ok(!rr.ok && /Compressor A overload/.test(rr.message), rr.message);
+  assert.deepStrictEqual(rpad.st.entered, []);
+  assert.strictEqual(rpad.st.at, "home");
   // One run at a time: the button and /chiller rearm share one keypad.
   rpad = fakePad();
   const [ra, rb] = await Promise.all([rearmLogger(rearmDeps(rpad)), rearmLogger(rearmDeps(rpad))]);

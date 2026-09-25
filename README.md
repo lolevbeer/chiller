@@ -579,8 +579,9 @@ controller's virtual keypad the same way a person would:
 2. Tap Esc until the main screen shows.
 3. Hold Alarm+Enter to open the system menu, tap Down until the selected row
    reads `LOGGER`, and press Enter.
-4. Tap Down until the selected row reads `RESTART LOGS`, re-read the screen,
-   and press Enter only if it still reads exactly that. **WIPE LOGS** sits two
+4. Tap Down until the selected row reads `RESTART LOGS`, re-read the screen and
+   the alarms, and press Enter only if it still reads exactly that and no alarm
+   has appeared (the walk takes 2 to 3 minutes). **WIPE LOGS** sits two
    rows below and must never be pressed.
 5. Tap Esc back to the main screen and post the outcome to Slack.
 
