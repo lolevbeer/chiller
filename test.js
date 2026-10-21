@@ -7,6 +7,7 @@ const { decide, reviveState, validBoostThresholds, IDLE: BOOST_IDLE, TRIP_F, BOO
 const { writeSetpoint, verifySetpoint } = require("./lib/modbus");
 const { commandResponse, trendFromCsv, alarmsText } = require("./lib/slack_commands");
 const { rearmLogger } = require("./lib/pgd");
+const { deploy } = require("./lib/deploy");
 const dateTime = require("./lib/datetime");
 
 // The requires above pulled in lib/config.js, which loads the REAL .env —
@@ -650,6 +651,45 @@ const cmdDeps = {
   const whyDeps = { ...cmdDeps, read: async () => ({ ...CMD_REGS, 31: 0, 68: 400 }) };
   assert.ok((await commandResponse("why", whyDeps)).text.includes("neither compressor reports running"));
   assert.ok((await commandResponse("help", cmdDeps)).text.includes("/chiller commands"));
+
+  // /chiller deploy: only the owner's email may pull code; unknown callers are refused.
+  let deployed = 0;
+  const deployDeps = (/** @type {string | undefined} */ email) => ({ ...cmdDeps, emailOf: async () => email,
+    deploy: async () => (deployed++, { ok: true, restart: true, message: "Updated a → b" }) });
+  for (const who of [undefined, "someone@lolev.beer"]) {
+    reply = await commandResponse("deploy", deployDeps(who));
+    assert.ok(reply.text.includes("Deploy refused") && !reply.restart);
+  }
+  reply = await commandResponse("deploy", { ...cmdDeps, emailOf: async () => { throw new Error("missing_scope"); } });
+  assert.ok(reply.text.includes("Deploy refused"));
+  assert.strictEqual((await commandResponse("deploy share", deployDeps("ted@lolev.beer"))).response_type, "ephemeral");
+  reply = await commandResponse("deploy", deployDeps("Ted@lolev.beer"));
+  assert.ok(reply.text.includes("Deploy complete") && reply.restart && deployed === 2); // refused calls never reached deploy()
+
+  // deploy(): refuse without Restart=always; skip npm unless dependencies changed.
+  // Each fake records the commands it ran; `git rev-parse` answers the before/after commits in order.
+  const fakeRun = (/** @type {Record<string, string>} */ out, heads = ["aaa", "bbb"]) => {
+    /** @type {string[]} */ const ran = [];
+    const run = async (/** @type {string} */ cmd, /** @type {string[]} */ args) => {
+      const key = [cmd, ...args].join(" ");
+      ran.push(key);
+      return key.startsWith("git rev-parse") ? heads.shift() ?? "" : out[key] ?? out[cmd] ?? "";
+    };
+    return { run, ran };
+  };
+  let fake = fakeRun({ systemctl: "on-failure" });
+  let dr = await deploy(fake);
+  assert.ok(!dr.ok && !dr.restart && !fake.ran.some((k) => k.startsWith("git")));
+  dr = await deploy(fakeRun({ systemctl: "always" }, ["aaa", "aaa"]));
+  assert.ok(dr.ok && !dr.restart && dr.message.includes("Already up to date"));
+  fake = fakeRun({ systemctl: "always", "git diff --name-only aaa bbb": "lib/x.js" });
+  dr = await deploy(fake);
+  assert.ok(dr.ok && dr.restart && !fake.ran.some((k) => k.startsWith("npm")));
+  fake = fakeRun({ systemctl: "always", "git diff --name-only aaa bbb": "lib/x.js\npackage-lock.json" });
+  dr = await deploy(fake);
+  assert.ok(dr.restart && fake.ran.includes("npm ci --omit=dev"));
+  dr = await deploy({ run: async (cmd) => { if (cmd === "systemctl") return "always"; throw Object.assign(new Error("x"), { stderr: "fatal: Not possible to fast-forward\n" }); } });
+  assert.ok(!dr.ok && !dr.restart && dr.message === "Deploy failed: fatal: Not possible to fast-forward");
 
   // All command responses use plain text status labels: no Slack emoji codes,
   // Unicode pictographs, or raw logger timestamps should leak into the UI.

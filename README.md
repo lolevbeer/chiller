@@ -158,8 +158,9 @@ recovery](#network-access-and-recovery).
 
 ## Deploying to the Pi
 
-Deploy committed work from a development machine, then update the existing
-checkout on the Pi:
+Push committed work to GitHub, then run `/chiller deploy` in Slack (owner only;
+see [Command reference](#command-reference)), or update the checkout on the Pi
+by hand:
 
 ```sh
 cd ~/chiller
@@ -200,8 +201,8 @@ sharing diagnostics. If one is exposed, revoke or rotate it in Slack immediately
 1. At [Slack API: Your Apps](https://api.slack.com/apps), create an app **from a
    manifest** and supply `slack-manifest.yml`. For an existing app, confirm that
    [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/) is
-   enabled, the `/chiller` slash command exists, and the bot has the `commands`
-   scope.
+   enabled, the `/chiller` slash command exists, and the bot has the `commands`,
+   `users:read`, and `users:read.email` scopes (the email check gates `/chiller deploy`).
 2. Open **Basic Information → App-Level Tokens** and generate a token with
    `connections:write`. Copy the resulting `xapp` token directly into the
    `SLACK_APP_TOKEN` entry in the Pi's `.env`.
@@ -237,6 +238,7 @@ do not paste the webhook URL into a command line.
 | `/chiller runtimes` | Pump, compressor, and condenser-fan hours |
 | `/chiller why` | Abnormal facts visible in the current snapshot; not a root-cause diagnosis |
 | `/chiller rearm` | Restart the datalogger after an alarm stopped it; presses keys on the controller (see [Datalogger re-arm](#datalogger-re-arm)) |
+| `/chiller deploy` | Owner only (`ted@lolev.beer`, hardcoded as `DEPLOYER` in `lib/slack_commands.js`): `git pull --ff-only`, `npm ci --omit=dev` when `package.json`/`package-lock.json` changed, then exits so systemd restarts on the new code. Replies are always private (`share` is ignored) because git/npm errors can include remote URLs. Refuses unless the unit is `Restart=always`. Needs the `users:read` and `users:read.email` bot scopes (reinstall the app after applying `slack-manifest.yml`) |
 | `/chiller help` | Command reference; any unrecognized command also shows help |
 
 Replies are private to the requester by default. Add `share` anywhere in the
@@ -815,7 +817,8 @@ dashboard access.
 - `lib/slack.js` evaluates proactive alerts, queues webhook posts, and builds the
   daily summary.
 - `lib/slack_commands.js` implements the `/chiller` Socket Mode commands; all
-  are read-only except `rearm`.
+  are read-only except `rearm` and `deploy`.
+- `lib/deploy.js` pulls the latest code onto the Pi for `/chiller deploy`.
 - `lib/pgd.js` drives the virtual keypad to re-arm the datalogger.
 - `lib/routes.js` serves APIs, static assets, development reloads, the pGD
   proxy, the `SETPOINT_WRITE`-gated manual setpoint endpoint, and the

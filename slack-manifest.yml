@@ -2,7 +2,7 @@ _metadata:
   major_version: 1
 display_information:
   name: Chiller
-  description: Chiller status and history, plus datalogger re-arm
+  description: Chiller status and history, plus datalogger re-arm and deploy
   background_color: "#111827"
 features:
   bot_user:
@@ -11,12 +11,14 @@ features:
   slash_commands:
     - command: /chiller
       description: Chiller status, alarms, trends, and runtimes; re-arm the datalogger
-      usage_hint: status | alarms | trend 6h | circuit a | runtimes | why | rearm
+      usage_hint: status | alarms | trend 6h | circuit a | runtimes | why | rearm | deploy
       should_escape: false
 oauth_config:
   scopes:
     bot:
       - commands
+      - users:read
+      - users:read.email
 settings:
   org_deploy_enabled: false
   socket_mode_enabled: true
