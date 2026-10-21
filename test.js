@@ -667,24 +667,27 @@ const cmdDeps = {
   assert.ok(reply.text.includes("Deploy complete") && reply.restart && deployed === 2); // refused calls never reached deploy()
 
   // deploy(): refuse without Restart=always; skip npm unless dependencies changed.
-  /** @type {string[]} */ let ran = [];
-  const fakeRun = (/** @type {Record<string, string>} */ out) => async (/** @type {string} */ cmd, /** @type {string[]} */ args) => {
-    const key = [cmd, ...args].join(" ");
-    ran.push(key);
-    if (key.startsWith("git rev-parse")) return ran.filter((k) => k.startsWith("git rev-parse")).length === 1 ? out.before : out.after;
-    return out[key] ?? out[cmd] ?? "";
+  // Each fake records the commands it ran; `git rev-parse` answers the before/after commits in order.
+  const fakeRun = (/** @type {Record<string, string>} */ out, heads = ["aaa", "bbb"]) => {
+    /** @type {string[]} */ const ran = [];
+    const run = async (/** @type {string} */ cmd, /** @type {string[]} */ args) => {
+      const key = [cmd, ...args].join(" ");
+      ran.push(key);
+      return key.startsWith("git rev-parse") ? heads.shift() ?? "" : out[key] ?? out[cmd] ?? "";
+    };
+    return { run, ran };
   };
-  let dr = await deploy({ run: fakeRun({ systemctl: "on-failure" }) });
-  assert.ok(!dr.ok && !dr.restart && !ran.some((k) => k.startsWith("git")));
-  ran = [];
-  dr = await deploy({ run: fakeRun({ systemctl: "always", before: "aaa", after: "aaa" }) });
+  let fake = fakeRun({ systemctl: "on-failure" });
+  let dr = await deploy(fake);
+  assert.ok(!dr.ok && !dr.restart && !fake.ran.some((k) => k.startsWith("git")));
+  dr = await deploy(fakeRun({ systemctl: "always" }, ["aaa", "aaa"]));
   assert.ok(dr.ok && !dr.restart && dr.message.includes("Already up to date"));
-  ran = [];
-  dr = await deploy({ run: fakeRun({ systemctl: "always", before: "aaa", after: "bbb", "git diff --name-only aaa bbb": "lib/x.js" }) });
-  assert.ok(dr.ok && dr.restart && !ran.some((k) => k.startsWith("npm")));
-  ran = [];
-  dr = await deploy({ run: fakeRun({ systemctl: "always", before: "aaa", after: "bbb", "git diff --name-only aaa bbb": "lib/x.js\npackage-lock.json" }) });
-  assert.ok(dr.restart && ran.includes("npm ci --omit=dev"));
+  fake = fakeRun({ systemctl: "always", "git diff --name-only aaa bbb": "lib/x.js" });
+  dr = await deploy(fake);
+  assert.ok(dr.ok && dr.restart && !fake.ran.some((k) => k.startsWith("npm")));
+  fake = fakeRun({ systemctl: "always", "git diff --name-only aaa bbb": "lib/x.js\npackage-lock.json" });
+  dr = await deploy(fake);
+  assert.ok(dr.restart && fake.ran.includes("npm ci --omit=dev"));
   dr = await deploy({ run: async (cmd) => { if (cmd === "systemctl") return "always"; throw Object.assign(new Error("x"), { stderr: "fatal: Not possible to fast-forward\n" }); } });
   assert.ok(!dr.ok && !dr.restart && dr.message === "Deploy failed: fatal: Not possible to fast-forward");
 
