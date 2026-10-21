@@ -238,7 +238,7 @@ do not paste the webhook URL into a command line.
 | `/chiller runtimes` | Pump, compressor, and condenser-fan hours |
 | `/chiller why` | Abnormal facts visible in the current snapshot; not a root-cause diagnosis |
 | `/chiller rearm` | Restart the datalogger after an alarm stopped it; presses keys on the controller (see [Datalogger re-arm](#datalogger-re-arm)) |
-| `/chiller deploy` | Owner only (`ted@lolev.beer`, hardcoded as `DEPLOYER` in `lib/slack_commands.js`): `git pull --ff-only`, `npm ci --omit=dev` when `package.json`/`package-lock.json` changed, then exits so systemd restarts on the new code. Refuses unless the unit is `Restart=always`. Needs the `users:read` and `users:read.email` bot scopes (reinstall the app after applying `slack-manifest.yml`) |
+| `/chiller deploy` | Owner only (`ted@lolev.beer`, hardcoded as `DEPLOYER` in `lib/slack_commands.js`): `git pull --ff-only`, `npm ci --omit=dev` when `package.json`/`package-lock.json` changed, then exits so systemd restarts on the new code. Replies are always private (`share` is ignored) because git/npm errors can include remote URLs. Refuses unless the unit is `Restart=always`. Needs the `users:read` and `users:read.email` bot scopes (reinstall the app after applying `slack-manifest.yml`) |
 | `/chiller help` | Command reference; any unrecognized command also shows help |
 
 Replies are private to the requester by default. Add `share` anywhere in the

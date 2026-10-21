@@ -662,8 +662,9 @@ const cmdDeps = {
   }
   reply = await commandResponse("deploy", { ...cmdDeps, emailOf: async () => { throw new Error("missing_scope"); } });
   assert.ok(reply.text.includes("Deploy refused"));
+  assert.strictEqual((await commandResponse("deploy share", deployDeps("ted@lolev.beer"))).response_type, "ephemeral");
   reply = await commandResponse("deploy", deployDeps("Ted@lolev.beer"));
-  assert.ok(reply.text.includes("Deploy complete") && reply.restart && deployed === 1); // refused calls never reached deploy()
+  assert.ok(reply.text.includes("Deploy complete") && reply.restart && deployed === 2); // refused calls never reached deploy()
 
   // deploy(): refuse without Restart=always; skip npm unless dependencies changed.
   /** @type {string[]} */ let ran = [];
