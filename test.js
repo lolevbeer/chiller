@@ -362,8 +362,8 @@ assert.deepStrictEqual(
 // reservoir-low Slack alert exists; Al_LowlvlSensor still uses the alarm path.
 assert.deepStrictEqual(seq(...rep(6, { ...OK, web: { ...WEB_OK, "Reservoir level": 0 } })).flat(), []);
 
-// Runtime imbalance past 100 h
-assert.ok(seq({ ...OK, regs: { ...REGS_OK, 135: 900, 141: 500 } })[0][0].includes("400 h apart"));
+// Compressor runtime differences never alert (the imbalance warning was removed).
+assert.deepStrictEqual(seq({ ...OK, regs: { ...REGS_OK, 135: 900, 141: 500 } })[0], []);
 
 // Not cooling: a compressor running 20 min with glycol off setpoint and NOT falling.
 // The controller raises no alarm for this — the circuit looks like it's working.
