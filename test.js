@@ -1,8 +1,9 @@
 // Offline self-check for scale/sign logic, getvar.csv row parsing, and page wiring
 // (no device needed).  Run: node test.js
 const assert = require("node:assert");
+const { addSetpoint } = require("./lib/logcache");
 const { serve, scale, ROW, WEB_VARS, UNUSED_WEB_VARS, PAGE, TSTAMP, step, logInsert, logSlice } = require("./chiller_dashboard.js");
-const { post, flushPosts, initialDailyKey } = require("./lib/slack");
+const { post, flushPosts, initialDailyKey, packState, unpackState } = require("./lib/slack");
 const { decide, reviveState, validBoostThresholds, IDLE: BOOST_IDLE, TRIP_F, BOOST_MARGIN_F, BOOST_URGENT_F } = require("./lib/boost");
 const { writeSetpoint, verifySetpoint } = require("./lib/modbus");
 const { commandResponse, trendFromCsv, alarmsText } = require("./lib/slack_commands");
@@ -396,6 +397,32 @@ assert.ok(!seq(logStale, logStale, { ...OK, logNewest: null }, { ...logStale, re
   .flat().some((p) => p.includes("Resolved: Datalogger")));
 assert.ok(seq(logStale, logStale, logFresh)[2].some((p) => p.includes("Resolved: Datalogger stopped")));
 
+// Short-cycling: a compressor toggling every minute alerts on its 7th start in
+// the hour (default SLACK_CYCLE_STARTS=6), not before, and clears only once the
+// rate falls to half of that.
+{
+  const on = { ...OK, regs: { ...REGS_OK, 31: 1 } };
+  const toggling = Array.from({ length: 14 }, (_, i) => (i % 2 ? on : OK));
+  const posts = seq(...toggling);
+  const first = posts.findIndex((p) => p.some((x) => x.includes("Compressor A short-cycling")));
+  assert.strictEqual(first, 13);
+  assert.ok(posts[13].find((x) => x.includes("short-cycling")).includes("7 starts in the last hour"));
+  const steady = seq(...toggling, ...rep(30, on)).slice(14).flat();
+  assert.ok(!steady.some((x) => x.includes("Resolved: Compressor A short-cycling"))); // 7 starts still inside the hour
+  assert.ok(seq(...toggling, ...rep(60, on)).slice(14).flat().some((x) => x.includes("Resolved: Compressor A short-cycling")));
+}
+
+// Condenser fans at full speed: alerts after 30 min with the compressor running;
+// pinned fans with the compressor off (a fan test, say) are not the condenser limit.
+{
+  const pinned = { ...OK, regs: { ...REGS_OK, 31: 1, 4: 1200 }, web: { ...WEB_OK, "Fan speed A %": 100 } };
+  const posts = seq(...rep(31, pinned));
+  assert.strictEqual(posts.findIndex((p) => p.some((x) => x.includes("Condenser A fans at full speed"))), 30);
+  assert.ok(posts[30].find((x) => x.includes("Condenser A")).includes("condensing at 120.0°F"));
+  const idle = { ...pinned, regs: { ...REGS_OK, 4: 1200 } };
+  assert.ok(!seq(...rep(31, idle)).flat().some((x) => x.includes("Condenser A")));
+}
+
 // log cache: chunks merge deduped on timestamp, stay sorted; slice = header + window.
 // Timestamps built relative to now — logInsert trims rows older than its 7 d window.
 const pad = (n) => String(n).padStart(2, "0");
@@ -413,6 +440,18 @@ assert.ok(sliced[0].startsWith("TIME") && sliced[1].includes("5.5") && sliced[2]
 
 // disk persistence roundtrip: reloading a saved cache file adds nothing new
 assert.strictEqual(logInsert(logSlice(-Infinity, Infinity) + "\n"), 0);
+
+// Setpoint history: only changes are recorded, and trimming keeps the 7-day
+// window plus the one record before it (the value in force at the window start).
+{
+  const D = 86400e3, log = [];
+  assert.ok(addSetpoint(log, 0, 29));
+  assert.ok(!addSetpoint(log, 60e3, 29)); // unchanged: no row
+  assert.ok(addSetpoint(log, D, 35));
+  assert.ok(addSetpoint(log, 2 * D, 29));
+  assert.ok(addSetpoint(log, 9 * D, 31)); // window starts at 2 d: drop 0 d, keep 1 d
+  assert.deepStrictEqual(log, [[D, 35], [2 * D, 29], [9 * D, 31]]);
+}
 
 // history chart wiring: uplot assets + section in the page; the log columns the
 // refresh script reads (temps + per-circuit compressor states for the run
@@ -439,6 +478,19 @@ for (const anchor of ["/three.js", "unit3d", "chipAnchors"]) {
 // during or after it suppresses a misleading tiny same-day window.
 assert.strictEqual(initialDailyKey(new Date(2026, 6, 13, 7, 0), 8), null);
 assert.strictEqual(initialDailyKey(new Date(2026, 6, 13, 8, 0), 8), "2026-07-13");
+
+// slack_state.json round-trip: queued alerts and the summary window survive a
+// restart; an empty window (±Infinity min/max, null through JSON) or a
+// malformed file is never revived as numbers.
+{
+  const st = { since: new Date(2026, 9, 22, 8, 0), n: 3, outMin: 27.5, outMax: 29, outSum: 84, inSum: 120, faults: new Set(["High glycol temp"]) };
+  const back = unpackState(JSON.parse(JSON.stringify(packState({ pendingPosts: [{ text: "*Warning: x*" }], stats: st, lastDaily: "2026-10-21" }))));
+  assert.deepStrictEqual(back, { pendingPosts: [{ text: "*Warning: x*" }], lastDaily: "2026-10-21", stats: st });
+  const empty = { since: new Date(), n: 0, outMin: Infinity, outMax: -Infinity, outSum: 0, inSum: 0, faults: new Set() };
+  assert.strictEqual(unpackState(JSON.parse(JSON.stringify(packState({ pendingPosts: [], stats: empty, lastDaily: null })))).stats, null);
+  assert.strictEqual(unpackState({ pendingPosts: "nope", lastDaily: null }), null);
+  assert.strictEqual(unpackState(null), null);
+}
 
 // /chiller is rendered entirely from injectable reads. Exercise every command
 // without a Slack connection or controller; Socket Mode is only the transport.
