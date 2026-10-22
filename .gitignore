@@ -9,3 +9,7 @@ log_cache.csv.tmp
 pgd-capture.log
 boost_state.json
 boost_state.json.tmp
+slack_state.json
+slack_state.json.tmp
+setpoint_log.json
+setpoint_log.json.tmp

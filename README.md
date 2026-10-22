@@ -21,8 +21,8 @@ when `SETPOINT_WRITE=1` is set: the [automatic setpoint
 boost](#automatic-setpoint-boost) writes the cooling setpoint to dodge the
 controller's hardcoded high-glycol shutdown, and the dashboard's manual
 setpoint control (`POST /api/setpoint`) writes it on operator request. Every
-other register access is a read. Separately, the datalogger re-arm (dashboard
-button or `/chiller rearm`) presses keys on the controller's virtual keypad;
+other register access is a read. Separately, the datalogger re-arm (automatic
+when the log stops, dashboard button, or `/chiller rearm`) presses keys on the controller's virtual keypad;
 see [Datalogger re-arm](#datalogger-re-arm). The
 application has no built-in authentication; put an access-control layer such as
 Cloudflare Access in front of it before exposing it beyond a trusted network.
@@ -84,10 +84,12 @@ the code. Environment variables set by the service or shell are also supported.
 | `PORT` | `8000` | Dashboard listen port |
 | `LOG_FILE` | `log_cache.csv` beside the code | Persistent seven-day datalogger cache |
 | `LOG_POLL_MIN` | `5` | Datalogger tail-poll interval in minutes |
+| `SETPOINT_FILE` | `setpoint_log.json` beside the code | Seven-day setpoint-change history for the chart |
 | `SLACK_WEBHOOK_URL` | unset | Enables proactive Slack alerts and the daily summary |
 | `SLACK_APP_TOKEN` | unset | Slack app-level token for Socket Mode commands |
 | `SLACK_BOT_TOKEN` | unset | Slack bot token for `/chiller` commands |
 | `SLACK_DASHBOARD_URL` | unset | Operator-accessible dashboard link appended to Slack responses |
+| `SLACK_STATE_FILE` | `slack_state.json` beside the code | Persisted alert queue and daily-summary window |
 | `SETPOINT_WRITE` | unset | `1` enables both write paths — the [automatic setpoint boost](#automatic-setpoint-boost) and the dashboard's manual `POST /api/setpoint` control; anything else keeps the app fully read-only |
 | `SETPOINT_WREG` | `1` | HOLDING register the setpoint is written to; confirm with `probe_setpoint.js` first |
 
@@ -251,8 +253,11 @@ pump, compressor, or other control actions.
 The alert loop polls every `SLACK_POLL_MIN` minutes and is edge-triggered. It
 posts once when a condition becomes active and once when it clears, including
 the incident duration. Persistent conditions stay quiet. Failed deliveries are
-kept in an ordered in-memory queue and retried on the next poll; later events do
-not leapfrog them. A failed source read is treated as unknown, never as proof
+kept in an ordered queue and retried on the next poll; later events do not
+leapfrog them. The queue, the daily-summary window, and the last summary date
+persist in gitignored `slack_state.json` (`SLACK_STATE_FILE`), so a restart or
+`/chiller deploy` during a Slack outage loses nothing. Open incidents are not
+persisted: a fault still standing after a restart is announced again. A failed source read is treated as unknown, never as proof
 that an incident recovered.
 
 Each message starts with a bold severity label, which sets the color of its
@@ -272,15 +277,17 @@ for setpoint changes). Messages contain no emoji.
 | Glycol freeze floor | Below `SLACK_FREEZE_F=20` °F | 5 min |
 | No flow | Pump running while its flow switch reports no flow | 2 min |
 | Not cooling | Compressor running off setpoint without a falling outlet trend | `SLACK_NOTCOOL_MIN=20` min |
-| Datalogger stopped | No new log row for `SLACK_LOG_STALE_MIN=15` min while the controller is online with no standing alarm (the log halts on any alarm and never re-arms itself); clears only once fresh rows arrive | 2 polls |
+| Datalogger stopped | No new log row for `SLACK_LOG_STALE_MIN=15` min while the controller is online with no standing alarm (the log halts on any alarm and never re-arms itself); the alert loop then runs one automatic [re-arm](#datalogger-re-arm) and posts its outcome; clears only once fresh rows arrive | 2 polls |
 | Controller offline | Modbus read fails | 2 polls |
+| Compressor short-cycling | More than `SLACK_CYCLE_STARTS=6` compressor starts in the last hour on one circuit, counted from the once-a-minute polls (a start shorter than a poll can be missed, never invented); clears at half that rate | Immediate |
+| Condenser fans at full speed | A circuit's condenser fans at or above `SLACK_FAN_PCT=95` percent while its compressor runs — the condenser is at its limit (dirty coils, blocked airflow, or a hot day; the unit has no outdoor-air sensor to tell them apart) | `SLACK_FAN_MIN=30` min |
 
 Temperature alerts clear only after moving `SLACK_HYST_F=2` °F back inside the
 threshold. Propane alerts clear below half their trip point. The daily summary
 runs after `SLACK_DAILY_HOUR=8` in the Pi's local time and includes outlet
 minimum/maximum/average, inlet average, current setpoint and reservoir
-temperature, compressor hours, and alarms observed during the window. Its
-accumulator resets on service restart and the message states the actual window.
+temperature, compressor hours, and alarms observed during the window. The window survives service restarts, and
+the message states the actual window.
 
 ### Slack troubleshooting
 
@@ -435,6 +442,7 @@ pGD tree), and every response carries `X-Content-Type-Options: nosniff` and
 | `POST /api/rearm-logger` | Datalogger re-arm (JSON content type required); 200 on success, 409 when refused or backed out; see [Datalogger re-arm](#datalogger-re-arm) |
 | `/api/alarms` | `{"active": [{name, since}], "recent": [{name, at, cleared}]}` |
 | `/api/log?start=…&stop=…` | Cached CSV slice; timestamps must be `YYYY-MM-DDThh:mm:ss` |
+| `/api/setpoints?start=…&stop=…` | Recorded setpoint changes in the same window as JSON `[[ms, °F], …]`, led by the value in force at `start` |
 | `/pgd/*` | Narrow reverse proxy to the controller's live HTML5 pGD interface |
 | `/datetime.js`, `/app.js`, `/unit3d.js`, `/logo.svg` | Shared date/time formatter, dashboard scripts, and G&D seal artwork |
 | `/uplot.js`, `/uplot.css` | Locally served uPlot assets; no CDN |
@@ -478,10 +486,12 @@ and fan state, runtimes, and controller alarms. Circuit A is blue and circuit B
 green throughout. Failed refreshes dim stale readings and mark the page offline.
 
 The history chart offers 6 h, 24 h, and 7 d ranges. It plots glycol inlet and
-outlet, the current setpoint as a reference line, compressor run strips, and
-condensing temperatures derived from logged R290 discharge pressure. Because
-the datalogger has no setpoint column, the setpoint line is current rather than
-historical. `X-Log-Loading: 1` tells clients that the cache is still backfilling.
+outlet, the setpoint as a dashed step line, compressor run strips, and
+condensing temperatures derived from logged R290 discharge pressure. The datalogger
+has no setpoint column, so the server records every setpoint change it sees in
+a Modbus read to gitignored `setpoint_log.json` (seven days), and the chart draws
+that history as a step line. Until a change has been recorded the line is flat
+at the current setpoint. `X-Log-Loading: 1` tells clients that the cache is still backfilling.
 
 Clicking the modeled control box opens the live pGD through `/pgd/`. Its keys
 operate the real controller. Browsing information screens is safe; use Esc to
@@ -572,13 +582,15 @@ one-hour future pad.
 The log stopped after a 2026-04-15 service visit and was re-armed on 2026-07-11.
 It halts on every alarm and never restarts itself. Slack posts a *Datalogger
 stopped* warning once it has been silent for `SLACK_LOG_STALE_MIN` minutes with
-no alarm standing. The controller's own chart is at
+no alarm standing, and the alert loop re-arms it automatically once per
+incident. The controller's own chart is at
 `http://<controller>/logger.htm`.
 
 #### Datalogger re-arm
 
-The dashboard's **Re-arm logger** button (in the "Datalogger stopped" banner)
-and `/chiller rearm` both run `lib/pgd.js`, which presses keys on the
+The alert loop (once, when the *Datalogger stopped* alert opens), the
+dashboard's **Re-arm logger** button (in the "Datalogger stopped" banner), and
+`/chiller rearm` all run `lib/pgd.js`, which presses keys on the
 controller's virtual keypad the same way a person would:
 
 1. Refuse, without pressing anything, if an alarm stands (the log would stop
@@ -810,11 +822,12 @@ dashboard access.
   `decide()` core plus the polling/writing/persisting shell.
 - `lib/webvars.js` contains `WEB_VARS` and `readWeb()`.
 - `lib/alarms.js` reads and folds the controller alarm log.
-- `lib/logcache.js` implements datalogger fetch, merge, persistence, and slices.
+- `lib/logcache.js` implements datalogger fetch, merge, persistence, and slices,
+  plus the setpoint-change history the datalogger lacks.
 - `lib/datetime.js` is the shared Node/browser formatter for human-facing dates,
   time ranges, and durations.
-- `lib/slack.js` evaluates proactive alerts, queues webhook posts, and builds the
-  daily summary.
+- `lib/slack.js` evaluates proactive alerts, queues and persists webhook posts,
+  builds the daily summary, and starts the automatic datalogger re-arm.
 - `lib/slack_commands.js` implements the `/chiller` Socket Mode commands; all
   are read-only except `rearm` and `deploy`.
 - `lib/deploy.js` pulls the latest code onto the Pi for `/chiller deploy`.

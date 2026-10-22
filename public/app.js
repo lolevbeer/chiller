@@ -267,11 +267,13 @@ async function loadHist(hours) {
   // stamped past "now" would otherwise be silently dropped.
   const now = Date.now();
   const stop = new Date(now + 3600e3), start = new Date(now - hours * 3600e3);
-  let text;
+  const q = `start=${tstr(start)}&stop=${tstr(stop)}`;
+  let text, sps = [];
   try {
-    const res = await fetch(`/api/log?start=${tstr(start)}&stop=${tstr(stop)}`);
+    const [res, spRes] = await Promise.all([fetch(`/api/log?${q}`), fetch(`/api/setpoints?${q}`).catch(() => null)]);
     histBackfilling = res.headers.get("X-Log-Loading") === "1";
     text = await res.text();
+    if (spRes && spRes.ok) sps = await spRes.json().catch(() => []);
   } catch { return null; }
   const rows = text.trim().split(/\r?\n/); // controller CSV is CRLF
   const head = (rows.shift() || "").split(",").map(s => s.replace(/"/g, ""));
@@ -302,7 +304,16 @@ async function loadHist(hours) {
     bs.push(+c[iB1] || +c[iB2] ? 0.5 : null);
     ca.push(condF(parseFloat(c[iP1]))); cb.push(condF(parseFloat(c[iP2])));
   }
-  return [xs, ins, outs, as, bs, ca, cb];
+  // Recorded setpoint changes ([ms, °F], see lib/logcache.js) as a step line:
+  // each sample takes the newest change at or before it, null before the first
+  // record. No records yet (fresh install or failed fetch) → null, and drawHist
+  // falls back to a flat line at the live setpoint.
+  let j = -1;
+  const sp = sps.length ? xs.map((x) => {
+    while (j + 1 < sps.length && sps[j + 1][0] / 1000 <= x) j++;
+    return j < 0 ? null : sps[j][1];
+  }) : null;
+  return [xs, ins, outs, as, bs, ca, cb, sp];
 }
 
 // Condensing temp isn't in the datalogger, but discharge pressure (bar abs) is,
@@ -321,14 +332,15 @@ function condF(bar) { // °C sat temp for propane at `bar` abs, returned in °F;
   return null; // above 60 °C sat — not a real operating point, likely a bad sample
 }
 
-// Current cooling setpoint (Modbus reg 70, °F), set by tick(). Drawn as a flat
-// dashed reference across the window — the datalogger has no setpoint column,
-// so past setpoint changes aren't recorded; only "where it should be now".
+// Current cooling setpoint (Modbus reg 70, °F), set by tick(). The chart draws
+// the server's recorded setpoint history; this live value is only the flat
+// fallback while that history is empty.
 let histSetp = null;
 let histGaps = []; // logging-stopped spans in the current range, set by loadHist
 
 // The controller's onboard log freezes the instant a global alarm fires and does
-// not re-arm when it clears — re-arming is manual. Shown in the stopped banner so
+// not re-arm when it clears (the server's alert loop tries once; otherwise it is
+// manual). Shown in the stopped banner so
 // whoever sees the frozen chart knows how to fix it without hunting for the steps.
 const RESTART_STEPS = "On the controller display (pGD): hold Alarm + Enter ~3 s for the " +
   "system menu → LOGGER → RESTART LOGS. Logging re-arms even if it says “no logs to restart.”";
@@ -378,7 +390,7 @@ function drawHist(data) {
     const b = document.createElement("div");
     b.className = "log-stopped";
     b.innerHTML = `<strong>Datalogger stopped</strong> — no new rows for ${age(Date.now() - last * 1000)}. ` +
-      `The onboard log halts on any alarm and won’t restart on its own. ${RESTART_STEPS} ` +
+      `The onboard log halts on any alarm; when Slack alerts are on, the server tries one automatic re-arm. ${RESTART_STEPS} ` +
       `<button class="rearm" type="button">Re-arm logger</button><span class="rearm-note"></span>`;
     b.querySelector(".rearm-note").textContent = rearmNote;
     el.appendChild(b);
@@ -441,7 +453,8 @@ function drawHist(data) {
       // a circuit color with.
       { label: "Condenser A", stroke: v("--ckt-a"), width: 1, dash: [1, 3], scale: "cond", value: degF },
       { label: "Condenser B", stroke: v("--ckt-b"), width: 1, dash: [1, 3], scale: "cond", value: degF },
-      { label: "Setpoint", stroke: v("--dim"), width: 1, dash: [4, 4], value: degF },
+      { label: "Setpoint", stroke: v("--dim"), width: 1, dash: [4, 4], value: degF,
+        paths: uPlot.paths.stepped({ align: 1 }) }, // a setpoint jumps; it never ramps
     ],
     scales: { run: { range: [0, 15] } }, // strips occupy the bottom ~10%
     axes: [axis, { ...axis, size: 46, values: (u, vs) => vs.map(x => x + "°") },
@@ -466,7 +479,7 @@ function drawHist(data) {
       }
       ctx.restore();
     } } }],
-  }, [...data, data[0].map(() => histSetp)], el);
+  }, [...data.slice(0, 7), data[7] || data[0].map(() => histSetp)], el);
 }
 
 function histLoading() {
