@@ -11,7 +11,7 @@ Mac on home LAN
  ▼
 site LAN 192.168.4.0/22
  ├── Raspberry Pi `chiller` — dashboard and Slack service
- └── Carel c.pCO 192.168.6.86
+ └── Carel c.pCO (configured seed 192.168.6.86; rediscovered if moved)
       ├── Modbus TCP :502 — live INPUT registers
       └── HTTP :80 — web variables, alarms, datalogger, and virtual pGD
 ```
@@ -79,11 +79,16 @@ the code. Environment variables set by the service or shell are also supported.
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `CHILLER_IP` | `192.168.6.86` | Controller address |
+| `CHILLER_IP` | `192.168.6.86` | Operator-configured starting IPv4 address, not a permanently pinned transport target |
+| `CHILLER_DISCOVERY_CIDR` | `192.168.4.0/22` | Private IPv4 network to search; `/22` through `/32`, at most 1024 addresses |
+| `CHILLER_DISCOVERY` | enabled | `0` disables subnet scanning; configured/cached addresses are still verified and retried |
+| `CHILLER_MAC` | unset | Optional trusted controller hardware MAC pin; must agree with any persisted pin |
+| `CHILLER_ADDRESS_FILE` | `chiller_address.json` beside the code | Last verified address and trusted MAC pin; revalidated after restart |
 | `CHILLER_REGS` | `162` | Number of INPUT registers to read: addresses 0–161 |
 | `PORT` | `8000` | Dashboard listen port |
 | `LOG_FILE` | `log_cache.csv` beside the code | Persistent seven-day datalogger cache |
 | `LOG_POLL_MIN` | `5` | Datalogger tail-poll interval in minutes |
+| `TIMELINE_FILE` | `incident_timeline.jsonl` beside the code | Persistent seven-day independent incident timeline |
 | `SLACK_WEBHOOK_URL` | unset | Enables proactive Slack alerts and the daily summary |
 | `SLACK_APP_TOKEN` | unset | Slack app-level token for Socket Mode commands |
 | `SLACK_BOT_TOKEN` | unset | Slack bot token for `/chiller` commands |
@@ -430,11 +435,13 @@ pGD tree), and every response carries `X-Content-Type-Options: nosniff` and
 | `/` | Dashboard HTML: live 3D unit, safety state, glycol history, alarms, and virtual-controller entry point |
 | `/api` | JSON map of raw INPUT registers 0–161: `{address: uint16}` |
 | `/api/web` | JSON map of 16 filtered `getvar.csv` points in engineering units |
-| `/api/all` | Combined `{"regs": ..., "web": ..., "boost": ..., "writesEnabled": ...}` payload used by the five-second refresh loop; `boost` is the setpoint-boost status snapshot and `writesEnabled` tells the page whether the setpoint control renders |
+| `/api/all` | Combined `{"regs": ..., "web": ..., "boost": ..., "writesEnabled": ..., "controller": ...}` payload used by the five-second refresh loop; `controller` reports address discovery and identity status, and `writesEnabled` requires both `SETPOINT_WRITE=1` and a trusted target |
+| `/api/controller` | Address diagnostics: `host`, `configuredHost`, `cidr`, `scanning`, `writeAllowed`, trusted `mac` pin, `error`, `candidates`, and `lastScanAt`; no scan is started by reading status |
 | `POST /api/setpoint` | Manual setpoint write; see [Manual setpoint endpoint](#manual-setpoint-endpoint) |
 | `POST /api/rearm-logger` | Datalogger re-arm (JSON content type required); 200 on success, 409 when refused or backed out; see [Datalogger re-arm](#datalogger-re-arm) |
 | `/api/alarms` | `{"active": [{name, since}], "recent": [{name, at, cleared}]}` |
 | `/api/log?start=…&stop=…` | Cached CSV slice; timestamps must be `YYYY-MM-DDThh:mm:ss` |
+| `/api/timeline?hours=6` | Independent recorder JSON: chronological `samples`, newest-first `events` (up to 200), `truncated`, and recorder `status`; `hours` accepts `6`, `24`, or `168` and defaults to `6` |
 | `/pgd/*` | Narrow reverse proxy to the controller's live HTML5 pGD interface |
 | `/datetime.js`, `/app.js`, `/unit3d.js`, `/logo.svg` | Shared date/time formatter, dashboard scripts, and G&D seal artwork |
 | `/uplot.js`, `/uplot.css` | Locally served uPlot assets; no CDN |
@@ -495,6 +502,59 @@ sends `POST /api/setpoint`. Without `SETPOINT_WRITE=1` the readout renders as
 plain text. The same rail shows a "Boost active" line while the automatic
 setpoint boost holds a raised setpoint, and a warning when boost writes are
 latched off pending a register re-probe.
+
+### Incident timeline
+
+The **Incident timeline** is separate from the controller's onboard history.
+It records supply/return temperature, the actual sampled cooling setpoint, and
+controller status directly from Modbus, alongside observed alarm transitions
+and application actions. It starts with the dashboard service, regardless of
+Slack configuration or `SETPOINT_WRITE`, and keeps recording when an alarm stops
+the controller's onboard datalogger. It never writes to the controller.
+
+The recorder polls Modbus and active alarms independently, waiting 60 seconds
+between completed polls. The dashboard offers 6 h, 24 h, and 7 d ranges and
+refreshes every minute. Its setpoint line is stepped from recorded readings,
+not today's setting extended backward. Missing readings and gaps longer than
+two minutes break the lines. The existing onboard-history chart is unchanged.
+
+Recorded context includes:
+
+- Setpoint changes observed between successful Modbus reads, including changes
+  made at the physical controller.
+- Active/cleared alarm transitions; an alarm already standing on first
+  observation is labeled **Observed active**, not given an invented start time.
+  Failed alarm reads never count as a recovery.
+- Boost raises, restores, aborts, limits, and reported write failures.
+- Dashboard manual setpoint outcomes, including refused and unverified writes.
+- Datalogger re-arm requests and outcomes from the dashboard or Slack.
+- Proxied virtual-keypad inputs and their HTTP outcomes. A keypress response does
+  not prove which setting changed; physical keypad inputs are not audited.
+
+The event source identifies the application surface, not an authenticated
+operator. Actions are recorded independently of Slack delivery. Action times can
+precede the next sampled setpoint on the chart; changes or alarms entirely
+between polls may not be observed. There is no historical backfill before this
+recorder was installed.
+
+`TIMELINE_FILE` stores serialized JSONL batches, reloads on restart, and compacts
+at startup and daily to retain seven days. Each poll's samples, alarm baseline,
+and detected events are appended as one batch; a torn final batch is discarded
+on reload. Keep this file when deploying or moving the service.
+
+Unlike the controller's timestamps, timeline `at` values are real server UTC
+instants; the dashboard converts them to the viewer's local time. The API returns
+samples as `{at, supplyF, returnF, setpointF, status}` with unreadable values
+`null`. Events include `{at, type, source, message}`, available readings, and
+structured `alarm`/`active` or `previousSetpointF` fields where applicable.
+`status` contains `{recording, lastSampleAt, error}`.
+
+The timeline remains readable when live controller readings are offline. A
+failed timeline request retains the previous view with a warning; storage
+errors and stale recording are also visible. If appending fails, the recorder
+refuses further writes rather than append behind a potentially torn batch:
+repair disk space/permissions and restart the service. It does not silently
+substitute in-memory history for persisted data.
 
 ## Architecture and data sources
 
@@ -740,6 +800,67 @@ at 33/64 and EEV position at 26/58.
 
 ## Network access and recovery
 
+### Controller address discovery
+
+The app resolves the controller's address at operation time rather than copying
+`CHILLER_IP` into every module at startup. It verifies the configured seed and
+saved address on the first poll; a failed controller operation invalidates only
+that operation's address. Modbus reads/writes, web variables, alarms, the logger,
+and the virtual keypad then use the newly resolved address without an app restart.
+
+Run a read-only discovery pass from a machine with access to the site:
+
+```sh
+npm run discover
+npm run discover -- --json
+# Narrow the search when only the controller's former /24 is routed:
+CHILLER_DISCOVERY_CIDR=192.168.6.0/24 npm run discover
+```
+
+Discovery never sends a Modbus write or virtual-keypad input, even if
+`SETPOINT_WRITE=1` is already configured. It checks TCP port 502 and then requires
+valid named CSV readings for this application's fan, compressor, glycol pressure,
+and both propane leak-sensor variables. An open port or a generic Carel web page
+is not enough. HTTP probes have a two-second deadline and a 64 KiB response limit.
+Subnet scans use at most eight concurrent probes, exclude network/broadcast
+addresses, and pause for 60 seconds after a completed scan before scanning again.
+Concurrent readers share a scan rather than each launching one. Dashboard reads
+do not wait for the full subnet scan; the header shows **discovering** instead.
+
+A full scan must finish with exactly one matching candidate before an address is
+selected. Ambiguous matches and discovery errors are exposed in `/api/controller`
+and the live header's tooltip. A known MAC mismatch rejects a candidate. The
+gitignored address cache is replaced atomically and stores only the selected
+address and trusted identity; cached addresses must pass verification again after
+restart. Cache corruption or a conflicting MAC pin is an error, not permission
+to forget the old identity.
+
+**Finding an address is not permission to control a different machine.** A
+verified operator-configured seed is trusted initially. Its MAC, when available
+through the local neighbor table, becomes the persisted pin. A moved/discovered
+address is monitoring-only unless its observed MAC matches that pin or an
+explicit `CHILLER_MAC`. A discovered candidate cannot establish its own trusted
+pin. Once a pin exists, fresh matching MAC evidence is required before each
+setpoint write or keypad input, including at the configured seed. MAC lookup may
+be unavailable across a routed VPN; the app then keeps moved targets read-only
+and explains why. Confirm the controller's identity from its label or the site's
+DHCP client list before configuring `CHILLER_MAC`.
+
+The header shows the selected IP and **read-only: identity unverified** when
+appropriate. The manual setpoint control stays hidden for unverified targets.
+Setpoint commands still require the existing `SETPOINT_WRITE=1` gate; discovery
+does not enable it. Writes are never automatically replayed on a different
+address, and verification stays on the original Modbus connection. A keypad
+session refuses an address change mid-menu; reload the dashboard before opening
+the controller display again.
+
+If no verified controller is found, check connectivity rather than assuming
+another DHCP reassignment. The home and site LANs overlap, and the Teleport split
+below routes only `192.168.6.0/24` to the site. A `/22` discovery range cannot make
+the other site addresses reachable through that tunnel. Run discovery on the
+on-site Pi, or deliberately fix the VPN routes if the device moved outside the
+routed `/24`. A DHCP reservation for the verified controller is also recommended.
+
 ### Teleport split tunnel
 
 The site is reached through Ubiquiti Teleport in WiFiman. Teleport installs
@@ -751,7 +872,7 @@ After Teleport connects, run:
 
 ```sh
 ./teleport_split.sh
-ping 192.168.6.86
+npm run discover
 ```
 
 The script finds the `utunN` interface that owns `0/1`, removes both half-range
@@ -802,15 +923,20 @@ dashboard access.
 ## Repository map
 
 - `chiller_dashboard.js` wires the modules into the `node:http` server and
-  starts the log cache, webhook reporter, setpoint-boost loop, and Socket Mode
-  listener.
+  starts the log cache, incident recorder, webhook reporter, setpoint-boost loop,
+  and Socket Mode listener.
 - `lib/modbus.js` contains `read()`, `scale()`, the confirmed `LABELS` map, and
   the read-back-verified `writeSetpoint()`.
+- `lib/controller.js` verifies controller identity, discovers changed addresses,
+  persists the last address/MAC pin, and guards control of moved targets.
+- `discover_chiller.js` is the read-only `npm run discover` diagnostic command.
 - `lib/boost.js` implements the opt-in automatic setpoint boost: a pure
   `decide()` core plus the polling/writing/persisting shell.
 - `lib/webvars.js` contains `WEB_VARS` and `readWeb()`.
 - `lib/alarms.js` reads and folds the controller alarm log.
 - `lib/logcache.js` implements datalogger fetch, merge, persistence, and slices.
+- `lib/timeline.js` persists independent temperature samples, observed setpoint
+  and alarm changes, boost actions, and operator actions.
 - `lib/datetime.js` is the shared Node/browser formatter for human-facing dates,
   time ranges, and durations.
 - `lib/slack.js` evaluates proactive alerts, queues webhook posts, and builds the
@@ -823,8 +949,8 @@ dashboard access.
   proxy, the `SETPOINT_WRITE`-gated manual setpoint endpoint, and the
   datalogger re-arm endpoint.
 - `dashboard.html` is the page markup and CSS. `public/app.js` handles live data,
-  alarms, history, the click-to-edit setpoint control, and the Re-arm logger
-  button;
+  alarms, onboard history, the independent incident timeline, the click-to-edit
+  setpoint control, and the Re-arm logger button;
   `public/unit3d.js` renders the model.
 - `slack-manifest.yml` is the reproducible Slack app definition.
 - `gd_seal.svg` is vendor artwork served as `/logo.svg` and used on the model.

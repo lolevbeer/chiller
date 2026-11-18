@@ -7,8 +7,9 @@
   "scripts": {
     "start": "node chiller_dashboard.js",
     "dev": "DEV=1 node --watch-path=chiller_dashboard.js --watch-path=dashboard.html --watch-path=lib --watch-path=public chiller_dashboard.js",
-    "test": "node test.js",
-    "typecheck": "tsc -p jsconfig.json"
+    "test": "node test.js && node --test test_controller*.js",
+    "typecheck": "tsc -p jsconfig.json",
+    "discover": "node discover_chiller.js"
   },
   "dependencies": {
     "@slack/bolt": "^4.7.3",

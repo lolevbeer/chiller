@@ -15,5 +15,5 @@
     "types": ["node"],
     "noEmit": true
   },
-  "include": ["chiller_dashboard.js", "lib/**/*.js", "test.js", "probe_setpoint.js"]
+  "include": ["chiller_dashboard.js", "lib/**/*.js", "test.js", "test_controller*.js", "probe_setpoint.js", "discover_chiller.js"]
 }

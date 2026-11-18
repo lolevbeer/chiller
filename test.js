@@ -9,6 +9,10 @@ const { commandResponse, trendFromCsv, alarmsText } = require("./lib/slack_comma
 const { rearmLogger } = require("./lib/pgd");
 const { deploy } = require("./lib/deploy");
 const dateTime = require("./lib/datetime");
+const { createTimeline } = require("./lib/timeline");
+const fsPromises = require("node:fs/promises");
+const os = require("node:os");
+const path = require("node:path");
 
 // The requires above pulled in lib/config.js, which loads the REAL .env —
 // including SLACK_WEBHOOK_URL. This suite must be network-silent, so drop the
@@ -845,5 +849,56 @@ const cmdDeps = {
   const rearmRefused = await commandResponse("rearm", { ...cmdDeps, rearmLogger: async () => ({ ok: false, message: "alarm active" }) });
   assert.ok(rearmRefused.text.startsWith("*Datalogger not re-armed*") && rearmRefused.text.includes("alarm active"));
   assert.ok((await commandResponse("help", cmdDeps)).text.includes("/chiller rearm"));
+  // Timeline persistence is deliberately independent from dashboard startup and
+  // hardware: use a controllable clock and a private directory for restart and
+  // torn-write cases.
+  const timelineDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "chiller-timeline-"));
+  const timelineFile = path.join(timelineDir, "timeline.jsonl");
+  let timelineNow = new Date("2026-10-20T00:00:00.000Z");
+  const clock = () => timelineNow;
+  const timeline = createTimeline({ file: timelineFile, now: clock });
+  await timeline.sample({ regs: { 0: 1, 68: 270, 69: 310, 70: 290 },
+    alarms: { active: [{ name: "High glycol temp" }] } });
+  // Unknown alarm reads are unknown, not a fabricated recovery.
+  timelineNow = new Date("2026-10-20T00:01:00.000Z");
+  await timeline.sample({ regs: { 0: 1, 68: 271, 69: 311, 70: 290 }, alarms: null });
+  let timelineView = await timeline.snapshot(6);
+  assert.deepStrictEqual(timelineView.events.filter((event) => event.type === "alarm")
+    .map((event) => ({ name: event.alarm, active: event.active })),
+    [{ name: "High glycol temp", active: true }]);
+  // All callers can append together without interleaved JSON lines.
+  await Promise.all(Array.from({ length: 12 }, (_, n) => timeline.record({
+    type: "operator", source: "test", message: `action ${n}`, at: timelineNow,
+  })));
+  await timeline.record({ type: "operator", source: "test", message: "clocked action" });
+  timelineView = await timeline.snapshot(6);
+  assert.strictEqual(timelineView.events.find((event) => event.message === "clocked action").at, timelineNow.toISOString());
+  // A successful setpoint read establishes a restart-safe baseline.
+  timelineNow = new Date("2026-10-20T00:02:00.000Z");
+  await timeline.sample({ regs: { 70: 300 }, alarms: { active: [{ name: "High glycol temp" }] } });
+  const restarted = createTimeline({ file: timelineFile, now: clock });
+  timelineNow = new Date("2026-10-20T00:03:00.000Z");
+  await restarted.sample({ regs: { 70: 310 }, alarms: { active: [{ name: "High glycol temp" }] } });
+  timelineView = await restarted.snapshot(6);
+  assert.ok(timelineView.events.some((event) =>
+    event.type === "setpoint" && event.previousSetpointF === 30 && event.setpointF === 31));
+  assert.strictEqual(timelineView.events.filter((event) =>
+    event.type === "alarm" && event.alarm === "High glycol temp" && event.active).length, 1);
+  // A truncated final JSON record is removed before the next durable append.
+  await fsPromises.appendFile(timelineFile, '{"kind":"event"', "utf8");
+  const recovered = createTimeline({ file: timelineFile, now: clock });
+  await recovered.record({ type: "controller", source: "test", message: "after torn tail", at: timelineNow });
+  const restoredView = await createTimeline({ file: timelineFile, now: clock }).snapshot(6);
+  assert.deepStrictEqual(restoredView.events.filter((event) => event.source === "test")
+    .map((event) => event.message).sort(),
+    [...Array.from({ length: 12 }, (_, n) => `action ${n}`), "clocked action", "after torn tail"].sort());
+  // Seven-day retention drops old samples and events during the next daily compaction.
+  timelineNow = new Date("2026-10-28T00:03:00.000Z");
+  await recovered.sample({ regs: { 68: 280 }, alarms: { active: [] } });
+  timelineView = await recovered.snapshot(168);
+  assert.strictEqual(timelineView.samples.length, 1);
+  assert.ok(timelineView.events.every((event) => Date.parse(event.at) >= Date.parse("2026-10-21T00:03:00.000Z")));
+  await fsPromises.rm(timelineDir, { recursive: true, force: true });
+
   console.log("ok");
 })().catch((e) => { console.error(e); process.exitCode = 1; });

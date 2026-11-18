@@ -10,7 +10,7 @@
 // Entry point only — the pieces live in lib/ (modbus, webvars, logcache, slack,
 // routes); this file wires them together and re-exports the test surface.
 const http = require("http");
-const { HOST } = require("./lib/config"); // also loads .env before anything reads process.env
+const { controllerStatus } = require("./lib/controller"); // loads .env before env consumers
 const { scale, read, LABELS } = require("./lib/modbus");
 const { readWeb, WEB_VARS, UNUSED_WEB_VARS, ROW } = require("./lib/webvars");
 const { readLog, TSTAMP, logInsert, logSlice, logLoop } = require("./lib/logcache");
@@ -18,6 +18,7 @@ const { step, startSlack } = require("./lib/slack");
 const { startBoost } = require("./lib/boost");
 const { startSlackCommands } = require("./lib/slack_commands");
 const { handle, PAGE } = require("./lib/routes");
+const { startTimeline } = require("./lib/timeline");
 
 // modbus-serial can leak an async socket error (e.g. connect ETIMEDOUT when the
 // chiller is unreachable) outside the connectTCP promise, which would kill the
@@ -53,8 +54,9 @@ function serve(req, res) {
 
 if (require.main === module) {
   http.createServer(serve).listen(PORT, "0.0.0.0", () =>
-    console.log(`chiller dashboard on http://0.0.0.0:${PORT}  (chiller ${HOST})`)
+    console.log(`chiller dashboard on http://0.0.0.0:${PORT}  (controller seed ${controllerStatus().configuredHost}; automatic discovery on first poll)`)
   );
+  startTimeline(); // independent incident history, even without Slack or the onboard datalogger
   startSlack(); // no-op unless SLACK_WEBHOOK_URL is set
   startBoost(); // automatic setpoint boost — no-op unless SETPOINT_WRITE=1 (see lib/boost.js)
   startSlackCommands().catch((e) => console.error("Slack commands failed to start:", e));

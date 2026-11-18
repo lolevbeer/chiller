@@ -20,7 +20,8 @@
 // Usage:  CHILLER_IP=192.168.6.86 node probe_setpoint.js --read
 //         SETPOINT_WREG=1 node probe_setpoint.js --write --yes-i-am-sure
 const ModbusRTU = /** @type {typeof import("modbus-serial").default} */ (/** @type {unknown} */ (require("modbus-serial")));
-const { HOST } = require("./lib/config");
+const { CONFIGURED_HOST } = require("./lib/config");
+const { discoverController, getControllerHost, controllerFailed } = require("./lib/controller");
 const { connect } = require("./lib/modbus");
 
 const WREG = Number(process.env.SETPOINT_WREG || 1);
@@ -40,7 +41,7 @@ if (!args.includes("--read") && !args.includes("--write")) {
     "  node probe_setpoint.js --write --yes-i-am-sure  + ONE no-op write of the current setpoint to",
     `                                                  holding ${WREG} (SETPOINT_WREG), then re-verify`,
     "",
-    `Target: ${HOST} (CHILLER_IP)`,
+    `Configured seed: ${CONFIGURED_HOST} (CHILLER_IP); the current address is resolved when run.`,
   ].join("\n"));
   process.exit(1);
 }
@@ -68,8 +69,11 @@ function printTable({ input, holding }) {
 
 (async () => {
   const c = new ModbusRTU();
+  let host;
   try {
-    await connect(c); // lib/modbus.js: fails in 5 s on an unreachable chiller, not the OS's ~75 s
+    await discoverController();
+    host = await connect(c, { write: args.includes("--write") });
+    console.log(`Configured seed: ${CONFIGURED_HOST}; verified controller: ${host}`);
 
     // Step 1 — read-only compare.
     const before = await snapshot(c);
@@ -88,6 +92,8 @@ function printTable({ input, holding }) {
     // the setpoint, this is a no-op; if it's something else, only that register
     // shifts and the diff below says so before SETPOINT_WRITE is ever enabled.
     const current = before.input[SETPOINT_INPUT - BASE];
+    if (await getControllerHost({ write: true }) !== host)
+      throw new Error("controller address changed during probe; refusing write");
     console.log(`\nWriting the CURRENT setpoint value ${current} (${(current / 10).toFixed(1)}°F) unchanged to holding ${WREG} (FC6)…`);
     await c.writeRegister(WREG, current);
     const after = await snapshot(c);
@@ -109,6 +115,7 @@ function printTable({ input, holding }) {
     ].join("\n"));
     process.exit(0);
   } catch (e) {
+    if (host) controllerFailed(host);
     console.error("probe failed:", e instanceof Error ? e.message : String(e));
     process.exit(1); // non-zero on connect failure
   } finally {

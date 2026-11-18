@@ -1,6 +1,6 @@
 // Main page script (classic): the 5 s refresh loop (tick), offline handling,
 // the click-to-edit setpoint control (rendered only when the server reports
-// writesEnabled, i.e. SETPOINT_WRITE=1), and the uPlot glycol history chart.
+// writesEnabled, i.e. SETPOINT_WRITE=1 and verified controller identity), and the uPlot glycol history chart.
 // Loaded by dashboard.html at /app.js.
 const S = v => (v > 32767 ? v - 65536 : v) / 10;          // signed int16, ×10
 const STATUS = {1:"Standby",2:"Off — alarm",3:"Off — BMS",4:"Off — schedule",
@@ -17,13 +17,19 @@ const unit3d = { fans: [0, 0], comps: [false, false], changed: null };
 // setpoint readout becomes a button), the boost automation's live snapshot
 // (drives the "boost active"/latched lines), and the current supply temp
 // (shown in the setpoint dialog for reference).
-let writesOn = false, boostNow = null, liveSupplyF = null;
+let writesOn = false, boostNow = null, liveSupplyF = null, controllerNow = null;
 
 async function tick() {
   let d;
   try { d = await (await fetch("/api/all")).json(); }
   catch { return net(false); }
-  if (!d.regs) return net(false);
+  controllerNow = d.controller || null;
+  writesOn = !!d.writesEnabled;
+  boostNow = d.boost || null;
+  if (!d.regs) {
+    $("setp")?.setAttribute("disabled", "");
+    return net(false);
+  }
   net(true);
   const r = a => S(d.regs[a] ?? 0), w = d.web || {};
 
@@ -39,8 +45,6 @@ async function tick() {
   set("resT", r(132).toFixed(1) + " °F");
   histSetp = r(70); // feeds the history chart's setpoint reference line (and the setpoint dialog prefill)
   liveSupplyF = r(68);
-  writesOn = !!d.writesEnabled;
-  boostNow = d.boost || null;
   set("pwr", (d.regs[1] / 10).toFixed(0) + "%");
 
   for (const [n, sfx] of [["1", "A"], ["2", "B"]]) {
@@ -238,6 +242,25 @@ function net(ok) {
   if (ok) lastGoodMs = Date.now();
   el.textContent = ok ? "updated " + ChillerDateTime.clock(new Date(), true)
                       : "offline" + (lastGoodMs ? " · data " + age(Date.now() - lastGoodMs) + " old" : "");
+  if (controllerNow) {
+    const state = [];
+    if (controllerNow.host) state.push(controllerNow.host);
+    if (controllerNow.scanning) state.push("discovering");
+    if (controllerNow.host && !controllerNow.writeAllowed) state.push("read-only: identity unverified");
+    el.textContent += state.length ? " · " + state.join(" · ") : "";
+    const details = [
+      controllerNow.host ? `Controller: ${controllerNow.host}` : "No verified controller address",
+      `Configured seed: ${controllerNow.configuredHost}`,
+    ];
+    if (controllerNow.scanning) details.push(`Discovering on ${controllerNow.cidr}`);
+    if (controllerNow.host && !controllerNow.writeAllowed)
+      details.push("Monitoring only: moved controller hardware identity has not been verified; controls are blocked");
+    if (controllerNow.error) details.push(controllerNow.error);
+    el.title = details.join("\n");
+    if (controllerNow.error && !ok) el.textContent += " · " + controllerNow.error;
+  } else {
+    el.title = "Dashboard connection unavailable";
+  }
   el.className = ok ? "" : "down";
   document.body.classList.toggle("offline", !ok);
 }
@@ -490,3 +513,213 @@ histLoading();
   drawHist(await loadHist(histHours));
   setTimeout(histLoop, histBackfilling ? 5000 : 60000);
 })();
+
+// --- Incident timeline: server-recorded samples and actions -----------------
+// This is deliberately separate from the controller's onboard datalogger above:
+// its ISO timestamps are actual UTC instants, so native Date conversion gives the
+// viewer's local time rather than preserving the controller's wall clock.
+let timelineChart, timelineHours = 6, timelineData = null, timelineDataHours = null;
+let timelineRequest = 0, timelineLoading = false;
+const TIMELINE_CHART_H = 260;
+const timelineClock = new Intl.DateTimeFormat(undefined, {
+  month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit",
+});
+const finite = value => typeof value === "number" && Number.isFinite(value);
+const timelineDate = at => {
+  const date = new Date(at);
+  return Number.isNaN(date.getTime()) ? "Unknown time" : timelineClock.format(date);
+};
+const timelineAge = at => {
+  const ms = new Date(at).getTime();
+  return Number.isFinite(ms) ? age(Math.max(0, Date.now() - ms)) + " ago" : "unknown";
+};
+const timelineSampleIsStale = at => Date.now() - new Date(at).getTime() > 120e3;
+const timelineTemp = value => finite(value) ? value.toFixed(1) + " °F" : "—";
+
+function timelineStatus(status, stale = false) {
+  const el = $("timelineStatus");
+  const sampleIsStale = status.recording && status.lastSampleAt && timelineSampleIsStale(status.lastSampleAt);
+  if (stale || status.error) el.className = "bad";
+  else if (!status.recording || sampleIsStale) el.className = "warn";
+  else el.className = "";
+  if (status.error) {
+    el.textContent = `Recorder error: ${status.error}`;
+    if (stale) el.textContent += " — showing the last loaded data.";
+  } else if (!status.recording) {
+    if (status.lastSampleAt) el.textContent = `Recorder stopped; last sample ${timelineAge(status.lastSampleAt)}.`;
+    else el.textContent = "Recorder stopped; no samples recorded yet.";
+  } else if (!status.lastSampleAt) {
+    el.textContent = "Recorder is running; no samples recorded yet.";
+  } else if (sampleIsStale) {
+    el.textContent = `Recorder appears stale; last sample ${timelineAge(status.lastSampleAt)}.`;
+  } else {
+    el.textContent = `Recording independently; last sample ${timelineAge(status.lastSampleAt)}.`;
+  }
+}
+
+function timelineLoadingStatus() {
+  const el = $("timelineStatus");
+  el.className = "warn";
+  if (timelineData) {
+    el.textContent = `Loading ${timelineHours} h timeline; showing previously loaded ${timelineDataHours} h data.`;
+  } else {
+    el.textContent = `Loading ${timelineHours} h independent recorder timeline…`;
+  }
+}
+function timelineMessage(message) {
+  if (timelineChart) { timelineChart.destroy(); timelineChart = null; }
+  $("timelineChart").replaceChildren(Object.assign(document.createElement("div"), {
+    className: "msg", textContent: message,
+  }));
+}
+
+function timelineSeries(samples) {
+  const xs = [], supply = [], returns = [], setpoints = [];
+  let previous = null;
+  for (const sample of samples) {
+    const time = new Date(sample.at).getTime() / 1000;
+    if (!Number.isFinite(time)) continue;
+    if (previous != null && time - previous > 120) {
+      xs.push(time - .001); supply.push(null); returns.push(null); setpoints.push(null);
+    }
+    xs.push(time);
+    supply.push(finite(sample.supplyF) ? sample.supplyF : null);
+    returns.push(finite(sample.returnF) ? sample.returnF : null);
+    setpoints.push(finite(sample.setpointF) ? sample.setpointF : null);
+    previous = time;
+  }
+  return [xs, supply, returns, setpoints];
+}
+
+function drawTimeline(data) {
+  const samples = Array.isArray(data.samples) ? data.samples : [];
+  const series = timelineSeries(samples);
+  const summary = $("timelineSummary");
+  if (!series[0].length) {
+    summary.textContent = "No independent recorder samples exist for this range.";
+    timelineMessage("No independent recorder samples for this range.");
+    return;
+  }
+  if (timelineChart) timelineChart.destroy();
+  const css = getComputedStyle(document.documentElement);
+  const v = property => css.getPropertyValue(property).trim();
+  const axis = { stroke: v("--dim"), grid: { stroke: v("--line"), width: 1, dash: [3, 5] },
+    ticks: { show: false }, font: '11px "Inter", sans-serif', gap: 8 };
+  const degF = (u, value) => value == null ? "—" : value.toFixed(1) + " °F";
+  timelineChart = new uPlot({
+    width: $("timelineChart").clientWidth, height: TIMELINE_CHART_H,
+    cursor: { points: { size: 7 }, y: false },
+    series: [
+      { label: "Time", value: (u, value) => value == null ? "—" : timelineDate(value * 1000) },
+      { label: "Supply", stroke: v("--accent"), width: 2, value: degF },
+      { label: "Return", stroke: v("--hist-in"), width: 2, value: degF },
+      { label: "Actual setpoint", stroke: v("--mut"), width: 1.5, dash: [4, 4],
+        paths: uPlot.paths.stepped({ align: 1 }), value: degF },
+    ],
+    axes: [axis, { ...axis, size: 46, values: (u, values) => values.map(value => value + "°") }],
+  }, series, $("timelineChart"));
+  const first = timelineDate(samples[0].at), last = timelineDate(samples[samples.length - 1].at);
+  summary.textContent = `${samples.length} independent samples from ${first} to ${last}; ` +
+    "supply, return, and actual recorded setpoint. Missing and over-two-minute gaps are not connected.";
+}
+
+function timelineEvents(events, truncated) {
+  const host = $("timelineEvents");
+  const notice = $("timelineTruncated");
+  notice.hidden = !truncated;
+  host.replaceChildren();
+  if (!events.length) {
+    host.append(Object.assign(document.createElement("p"), { className: "msg",
+      textContent: "No recorded actions, alarms, or setpoint changes for this range." }));
+    return;
+  }
+  const table = document.createElement("table");
+  table.className = "timeline-events";
+  table.innerHTML = "<thead><tr><th>Time</th><th>Type</th><th>Description</th><th>Readings</th></tr></thead>";
+  const body = document.createElement("tbody");
+  for (const event of events) {
+    const row = document.createElement("tr");
+    const time = document.createElement("td");
+    time.textContent = timelineDate(event.at);
+    const type = document.createElement("td");
+    const typeName = document.createElement("span");
+    typeName.className = "event-type";
+    typeName.textContent = event.type || "event";
+    type.append(typeName);
+    if (event.source) {
+      type.append(document.createElement("br"));
+      const source = document.createElement("span");
+      source.className = "event-source";
+      source.textContent = event.source;
+      type.append(source);
+    }
+    const description = document.createElement("td");
+    description.textContent = event.message || "—";
+    const readings = document.createElement("td");
+    readings.className = "event-temps";
+    const values = [];
+    if (finite(event.supplyF)) values.push(`Supply ${timelineTemp(event.supplyF)}`);
+    if (finite(event.returnF)) values.push(`Return ${timelineTemp(event.returnF)}`);
+    if (finite(event.setpointF)) values.push(`Setpoint ${timelineTemp(event.setpointF)}`);
+    readings.textContent = values.join(" · ") || "—";
+    row.append(time, type, description, readings);
+    body.append(row);
+  }
+  table.append(body);
+  host.append(table);
+}
+
+function renderTimeline(data) {
+  drawTimeline(data);
+  timelineEvents(Array.isArray(data.events) ? data.events : [], !!data.truncated);
+  timelineStatus(data.status || { recording: false, lastSampleAt: null, error: "Invalid recorder status" });
+}
+
+async function loadTimeline(announce = false) {
+  const request = ++timelineRequest;
+  const hours = timelineHours;
+  timelineLoading = true;
+  if (announce) timelineLoadingStatus();
+  try {
+    const response = await fetch(`/api/timeline?hours=${hours}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    if (!data || !Array.isArray(data.samples) || !Array.isArray(data.events) || !data.status)
+      throw new Error("Invalid recorder response");
+    if (request !== timelineRequest) return; // range changed while this request was in flight
+    timelineData = data;
+    timelineDataHours = hours;
+    renderTimeline(data);
+  } catch {
+    if (request !== timelineRequest) return;
+    if (timelineData) {
+      const el = $("timelineStatus");
+      el.className = "bad";
+      el.textContent = `Couldn't load ${hours} h timeline; showing previously loaded ${timelineDataHours} h data.`;
+    } else {
+      timelineMessage("Independent recorder is unavailable.");
+      timelineEvents([], false);
+      timelineStatus({ recording: false, lastSampleAt: null, error: "Timeline request failed" }, true);
+    }
+  } finally {
+    if (request === timelineRequest) timelineLoading = false;
+  }
+}
+
+$("timelineRanges").onclick = event => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  timelineHours = +button.dataset.h;
+  for (const item of $("timelineRanges").querySelectorAll("button")) {
+    const selected = item === button;
+    item.classList.toggle("on", selected);
+    item.setAttribute("aria-pressed", String(selected));
+  }
+  loadTimeline(true);
+};
+addEventListener("resize", () => timelineChart &&
+  timelineChart.setSize({ width: $("timelineChart").clientWidth, height: TIMELINE_CHART_H }));
+loadTimeline(true);
+setInterval(() => {
+  if (!timelineLoading) loadTimeline();
+}, 60000);

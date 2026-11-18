@@ -31,8 +31,8 @@ body {
   overflow-x: clip; /* the .scene 100vw breakout must not create a horizontal scrollbar */
 }
 section { padding: 20px 0; transition: opacity .3s; }
-/* stale data reads as stale: everything below the header dims while offline */
-body.offline section, body.offline details { opacity: .45; }
+/* Live readings dim while offline; persisted incident history remains readable. */
+body.offline section:not(#timeline), body.offline details { opacity: .45; }
 /* sits inside the body's inset, so it lines up with the content below it */
 header { display: flex; align-items: center; gap: 14px; padding: 12px 0; }
 header .logo { height: 30px; width: auto; flex: none; color: var(--ink); }
@@ -195,6 +195,36 @@ h2 .cst { color: var(--dim); font-weight: 400; }
   background: rgb(8 9 12 / .92);
   color: var(--ink); font-size: 11px; white-space: nowrap; transition: opacity .12s; }
 .pgd-hint.show { opacity: 1; }
+/* --- Incident timeline: an independent server-side recorder. Unlike #hist,
+   it does not use the controller's onboard datalogger or its wall-clock. --- */
+#timeline { border-top: 1px solid var(--line); margin-top: 4px; }
+.timeline-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.timeline-head h2 { margin: 0; }
+.timeline-note { color: var(--dim); font-size: 12px; }
+#timelineRanges { display: flex; gap: 2px; padding: 2px; border-radius: 8px; margin-left: auto; }
+#timelineRanges button { background: none; border: 0; color: var(--mut);
+  font: 500 12px "Inter", sans-serif; padding: 5px 12px; border-radius: 6px; cursor: pointer;
+  transition-property: background-color, color; transition-duration: 150ms; }
+#timelineRanges button:hover { color: var(--ink); }
+#timelineRanges button.on { color: var(--ink); background: var(--line); }
+#timelineStatus { color: var(--dim); font-size: 12px; margin: 8px 0; }
+#timelineStatus.warn { color: var(--warn); }
+#timelineStatus.bad { color: var(--bad); }
+#timelineChart { min-height: 260px; }
+#timelineChart .msg, #timelineEvents .msg { color: var(--dim); font-size: 13px; padding: 38px 0; text-align: center; }
+#timelineSummary { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.timeline-events-title { margin-top: 18px; }
+.timeline-truncated { color: var(--warn); font-size: 12px; margin: -3px 0 8px; }
+#timelineEvents { max-height: 28rem; overflow: auto; }
+.timeline-events { border-collapse: collapse; width: 100%; font-size: 12px; }
+.timeline-events th, .timeline-events td { border-top: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.timeline-events th { color: var(--dim); font-weight: 500; white-space: nowrap; }
+.timeline-events td { color: var(--mut); }
+.timeline-events td:first-child, .timeline-events td:nth-child(2) { white-space: nowrap; }
+.timeline-events .event-type { color: var(--ink); font-weight: 500; }
+.timeline-events .event-temps { color: var(--dim); white-space: nowrap; }
+.timeline-events .event-source { color: var(--dim); }
 /* no-3D fallback: .flat ships in the markup and the module removes it only after
    the whole scene builds — if WebGL, /three.js, or any build step fails, the
    chips lay out as a plain flexbox instead of piling unpositioned at the corner */
@@ -223,6 +253,18 @@ h2 .cst { color: var(--dim); font-weight: 400; }
   .safety .g { display: grid; grid-template-columns: 72px max-content;
     justify-content: start; align-self: flex-start; gap: 12px; }
   #ranges button { padding-inline: 10px; }
+  .timeline-head { align-items: flex-start; }
+  .timeline-note { width: 100%; }
+  #timelineRanges { margin-left: 0; }
+  #timelineRanges button { padding-inline: 10px; }
+  .timeline-events, .timeline-events tbody { display: block; }
+  .timeline-events thead { display: none; }
+  .timeline-events tr { display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .timeline-events td { padding: 0; border: 0; }
+  .timeline-events td:nth-child(2) { text-align: right; }
+  .timeline-events td:nth-child(3), .timeline-events td:last-child { grid-column: 1 / -1; }
+  .timeline-events .event-temps { white-space: normal; }
   .hero-wrap { padding-inline: 0; }
   .scene:not(.flat) { height: auto; display: grid;
     width: 100%; margin-left: 0;
@@ -343,6 +385,24 @@ footer { padding-top: 16px; font-size: 12px; color: var(--dim); }
     <button data-h="168">7 d</button>
   </span></h2>
   <div id="chart"></div>
+</section>
+
+<section id="timeline" aria-labelledby="timelineTitle">
+  <div class="timeline-head">
+    <h2 id="timelineTitle">Incident timeline</h2>
+    <span class="timeline-note">Independent recorder — not the controller’s onboard history</span>
+    <div id="timelineRanges" role="group" aria-label="Incident timeline range">
+      <button type="button" data-h="6" class="on" aria-pressed="true">6 h</button>
+      <button type="button" data-h="24" aria-pressed="false">24 h</button>
+      <button type="button" data-h="168" aria-pressed="false">7 d</button>
+    </div>
+  </div>
+  <p id="timelineStatus" role="status" aria-live="polite">Loading independent recorder…</p>
+  <div id="timelineChart" role="img" aria-label="Independent recorder temperature chart" aria-describedby="timelineSummary"></div>
+  <p id="timelineSummary"></p>
+  <h2 class="timeline-events-title">Recorded context</h2>
+  <p id="timelineTruncated" class="timeline-truncated" hidden>Older matching events are not shown.</p>
+  <div id="timelineEvents" aria-live="polite" tabindex="0" aria-label="Recorded incident events"></div>
 </section>
 
 <section class="hero-wrap">
